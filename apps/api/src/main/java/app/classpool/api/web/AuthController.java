@@ -44,8 +44,9 @@ public class AuthController {
     @GetMapping("/google/callback")
     public ResponseEntity<SessionResponse> googleCallback(@RequestParam String code,
                                                             @RequestParam String state,
+                                                            HttpServletRequest request,
                                                             HttpServletResponse response) {
-        SessionService.Session session = googleOAuthService.handleCallback(code);
+        SessionService.Session session = googleOAuthService.handleCallback(code, state, request, response);
         cookieHelper.set(response, session.token());
         return ResponseEntity.ok(new SessionResponse(session.userId(), session.expiresAt()));
     }

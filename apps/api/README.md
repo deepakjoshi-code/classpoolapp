@@ -117,13 +117,16 @@ OpenAPI contract specifies a custom callback shape (`GET /auth/google/callback` 
 `Session` body) rather than Spring Security's default redirect-based
 `/login/oauth2/code/{registrationId}` handling.
 
-**Known simplification, flagged rather than silently shipped:** this flow does not itself
-issue/validate the OAuth2 `state` parameter against a stored authorization request the way Spring
-Security's default flow does (via `AuthorizationRequestRepository`) — there is no live Google app
-to test the full round trip against in this environment anyway. A production pass should add a
-Redis-backed pending-authorization-request store here, mirroring `MagicLinkService`'s pattern
-(store a server-generated `state` keyed to a short TTL when the frontend requests the Google
-authorization URL, verify it on callback).
+The *initiation* half, though, **is** stock Spring Security: `GET /oauth2/authorization/google`
+(what the frontend's "Continue with Google" button links to — Spring Security's conventional path,
+and apps/web is already built against it) is served by a manually-added
+`OAuth2AuthorizationRequestRedirectFilter` (`SecurityConfig`), which redirects to Google and
+stashes the generated `state` via a shared `AuthorizationRequestRepository` bean
+(`OAuth2Config`, `HttpSessionOAuth2AuthorizationRequestRepository` — the one place in this app that
+briefly uses a servlet session, scoped just to the OAuth2 handshake, separate from ClassPool's own
+Redis-backed session cookie). `GoogleOAuthService.handleCallback` reads and removes that stashed
+request on the way back and rejects the callback if `state` doesn't match — standard OAuth2 CSRF
+protection, and single-use since the repository entry is removed on first read.
 
 ## Schema ownership / Hibernate
 

@@ -6,8 +6,11 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.registration.InMemoryClientRegistrationRepository;
+import org.springframework.security.oauth2.client.web.AuthorizationRequestRepository;
+import org.springframework.security.oauth2.client.web.HttpSessionOAuth2AuthorizationRequestRepository;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
+import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 
 /**
  * Registers the "google" {@link ClientRegistration} directly (Spring Security's OAuth2 Client
@@ -46,5 +49,19 @@ public class OAuth2Config {
                 .clientName("Google")
                 .build();
         return new InMemoryClientRegistrationRepository(google);
+    }
+
+    /**
+     * Shared between {@link app.classpool.api.config.SecurityConfig}'s
+     * OAuth2AuthorizationRequestRedirectFilter (which writes the pending request + generated
+     * `state` here when GET /oauth2/authorization/google redirects the browser to Google) and
+     * {@link app.classpool.api.service.GoogleOAuthService} (which reads and removes it on the
+     * callback to validate `state`). HttpSession-backed — the one piece of this app that briefly
+     * uses a servlet session, scoped to just the OAuth2 handshake itself, separate from
+     * ClassPool's own Redis-backed CLASSPOOL_SESSION cookie (see README's "Session mechanism").
+     */
+    @Bean
+    public AuthorizationRequestRepository<OAuth2AuthorizationRequest> authorizationRequestRepository() {
+        return new HttpSessionOAuth2AuthorizationRequestRepository();
     }
 }
