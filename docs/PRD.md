@@ -1,8 +1,10 @@
-# ClassPool — Product & Engineering Blueprint (v1.1)
+# ClassPool — Product & Engineering Blueprint (v1.2)
 
 Working specification — Web/PWA first
 Base document: *ClassPool Full Product & Engineering Blueprint* (original blueprint).
 This revision is a PM pass over that original: gaps are called out inline as **`> 🔧 PM UPDATE`** blocks. Everything outside those blocks is the original spec, condensed for the repo. Nothing marked PM UPDATE is optional polish — each one blocks a real V1 flow (money, trust, or data model) if left unresolved.
+
+**v1.2 changes**: resolves physical custody of Class Reserve (previously undefined — see §9.4), plus a second gap pass covering class/school deduplication, substitution-equivalence authoring, self-reported-inventory trust, and organizer physical labor.
 
 ---
 
@@ -60,6 +62,10 @@ A class can run multiple pools per year (Fall Supplies, Science Project, Costume
 > 🔧 **PM UPDATE — Household/Student entities are missing from this hierarchy and from the data model in §13.** A parent with two kids in two different classes has no first-class way to see both in one place — §12.2 ("Parent Home") only mockups a single class. Add:
 > `ParentProfile → Household → Student(s)`, with each `Membership` linking a `Student` (not just a `ParentProfile`) to a `Classroom`. This makes a consolidated multi-child, multi-class parent dashboard possible instead of forcing parents to bounce between disconnected single-class views. See §12 and §13 updates.
 
+> 🔧 **PM UPDATE — school/class deduplication has no defined workflow, and this is more serious than it first looks.** The admin console (§12) already lists "Duplicate schools/classes" as something admin can *view*, but nothing describes how it's *prevented* or *fixed*. The failure mode: two parents at the same school both start "Lincoln Elementary, Ms. Smith, Grade 1" as separate classes, unaware of each other — now half the parents pool with one group and half with the other, and the entire value proposition (bulk pricing depends on pooled volume) is cut in half for both, silently. Since the whole product is a network-effect play on one class being one pool, this is a core-loop risk, not an admin nicety. Fix:
+> - **At creation time** (§2.4), typing a school name fuzzy-matches against existing `School` records first (and existing `Classroom` records under it) and prompts "Is this your class?" before allowing a new one — creation is still self-serve, just with a dedup check in front of it, not gated by anyone's approval.
+> - **Admin merge tool**: when duplicates slip through anyway, admin needs an actual merge action (union `Membership`s, keep the pool with the earlier `DRAFT`/open state, notify both organizers), not just a read-only "flagged" list.
+
 ### 2.4 Create a class
 
 Select/create school → choose grade, teacher/class label, school year → enter approximate student count → generate join URL + QR → one-tap invite text for email/text/parent groups.
@@ -101,6 +107,8 @@ Per-student quantity × confirmed participating students = total demand.
 
 States: Required quantity / Owned and retained / Owned surplus offered / Still needed / Item condition (for reusable goods).
 
+> 🔧 **PM UPDATE — self-reported inventory has no verification, and that should be a stated decision, not a silent gap.** A parent could under-report ("I have 0 pencils") to get the class to buy them new ones, or over-report to skip a purchase they actually need. Recommendation: **accept this as low-stakes risk for V1 and don't build verification** — the dollar amount at stake per item is small (a $2 glue stick), the social cost of visibly gaming a shared class list is high (organizer can see identity per §5.3), and verification (photos, receipts) would add friction to the one step that's supposed to feel instant ("You already have $31 worth of your list"). This gets revisited only if it shows up as real leakage once §18's validation pilot runs — it's an explicit accepted risk, not a fix to build now.
+
 ---
 
 ## 5. Surplus Contributions and Exchange Pool
@@ -128,6 +136,8 @@ TotalRequired
 ```
 
 Deterministic business logic, **not** LLM reasoning. Inputs: requirements, household inventory, confirmed surplus, class reserve, compatibility rules, condition rules, deadlines. Output per household/item pair: `self fulfilled` / `pool fulfilled` / `purchase required`.
+
+> 🔧 **PM UPDATE — "compatibility rules" is listed as an allocation-engine input, but nothing specifies who decides two products are equivalent, or how.** For an `equivalent_allowed` item (e.g. "any brand glue stick is fine"), the optimizer needs to know which catalog products actually qualify as substitutes before it can pick the cheapest one — that decision can't be left implicit, and per §15's AI boundary rule it must not be made by AI at purchase time. Fix: substitution eligibility is **organizer-authored per requirement**, scoped narrowly — e.g. organizer picks a product category + any required attributes (size, non-toxic, washable) rather than approving individual SKUs one by one, and that becomes the filter the optimizer runs against approved catalog offers (§7.4). AI may *suggest* candidate matches for the organizer to approve (already allowed per §15's table), but the approved rule itself is a deterministic filter, not a judgment call made per purchase.
 
 ---
 
@@ -175,7 +185,17 @@ Stripe (US), Razorpay/UPI (India, later). Never store raw card data. States: Pen
 
 Organizer marks products ordered, attaches receipt, records substitutions, tracks short shipments/refunds. Distribution modes: classroom desks, school lobby/event pickup, household allocation bags with printable labels. Organizer marks each bundle Delivered; parents get notified.
 
+> 🔧 **PM UPDATE — the physical labor of distribution is under-designed, and organizer burnout is a direct threat to the viral loop (§16.3 depends on organizers repeating).** "Printable labels" is the only tool mentioned, but the actual work is: open a 144-pack, count out exactly the right number of pencils per household, and get it right for 25 families without mixing up bags. §18 even tracks "organizer effort" as a validation metric but nothing in the product reduces it. Add a **per-household pick list** — generated straight from the `Allocation` output, printable or exportable, listing exact quantities per bag in one pass ("Family A: 12 pencils, 2 notebooks, 4 glue sticks") — this already exists as data (§9.2's example), it just needs to be a first-class exportable artifact, not something the organizer reconstructs by hand from the dashboard.
+
 **Class reserve**: bulk overage becomes reusable reserve rather than waste; next pool consumes reserve before asking families to buy new.
+
+> 🔧 **PM UPDATE — physical custody of Class Reserve is undefined in the original, and it's a real gap: someone has to physically hold leftover inventory, and the app can't leave that implicit.** Worked example: residual demand is 10 pens, cheapest offer is a 20-pack, organizer buys one. Here's what happens to all 20, concretely:
+> - The `PurchasePlanLine` records qty=20. The **Allocation engine already assigned the 10 needed pens to specific households** before purchase (§6) — those 10 are what actually gets bagged: the organizer (or whoever receives the shipment) splits the pack, and the 10 allocated pens go into the normal distribution flow — classroom desks, lobby pickup, or labeled household bags per §9.2/9.3 — matching each household's `DistributionItem` record, same as every other item on the list. Nothing new there.
+> - The other **10 are surplus with no household attached.** They don't get bagged for anyone, and they aren't given away free or rented to families — no transaction happens on them at all, because their cost was never billed to any household separately; it's inside the price of "one 20-pack," which the group already paid for as the cheapest way to cover 10 needed pens (§7.1's "waste penalty" is exactly this cost, already priced in).
+> - **Default physical custodian: the classroom, not the organizer's home.** Recommend Class Reserve defaults to living in the teacher's classroom supply cabinet, not a volunteer parent's house, because: (a) the teacher is stable across a school year while the organizer role can turn over mid-year (§2.1's succession problem), (b) reserve items are consumed by kids at school, so the classroom is where they're needed anyway, (c) it avoids a parent's home quietly becoming an unofficial warehouse with no accountability if that parent moves or stops volunteering. This doesn't require the teacher to do anything beyond what teachers already do (maintain a supply shelf) — it's not new work, and it doesn't touch money or verification, so it doesn't conflict with "teacher never handles money" (§2.1).
+> - **Data model**: `ClassReserve` needs a `custodianLocation` field (free-text label like "Ms. Smith's classroom, supply cabinet") logged by the organizer at intake, not a literal tracked address. The organizer stays accountable for the *record* (what's in reserve, per §12's dashboard) even when the *physical* item sits in the classroom.
+> - **Next pool draws it down automatically**: when the next pool's residual-demand calculation runs (§6.1), `ClassReserveAvailable` is checked before the optimizer buys anything new — the 10 reserved pens reduce that pool's residual demand by 10, lowering everyone's bill, with no per-family credit for who originally "paid into" the reserve (it was already priced into last year's per-unit bulk cost, same equity logic as §8.3's need-based model).
+> - **Stranded reserve (graduating class / no next pool)**: if a class has no next pool — most commonly the graduating grade at year-end — reserve items don't have anywhere to roll forward to. Default rule: organizer is prompted at pool completion to either (a) donate remaining reserve to the school's general supply closet (logged as a `Transfer` to a school-level reserve rather than a class-level one — useful since `School` already sits above `Classroom` in the hierarchy, §2.3), or (b) hand it to next year's incoming class at the same grade if the school reuses supply lists. No family gets a refund for stranded reserve — it was priced in when purchased, same as above.
 
 > 🔧 **PM UPDATE — post-purchase substitution workflow is named ("record substitutions made after optimizer proposal") but not specified.** When a SKU the optimizer priced goes out of stock and the organizer buys a different pack size/brand, the per-household bill parents already paid may no longer match what's distributed. V1 needs: substitution recorded against the `PurchasePlanLine`, delta (over/under) automatically flows to Class Reserve or triggers a partial refund — not a manual side conversation between organizer and parent.
 
@@ -227,7 +247,8 @@ Later: `Supplier, AffiliateMerchant, SchoolSubscription, ClassReserve, UsedItemL
 > 🔧 **PM UPDATE — additions needed for V1, not later, because they're referenced by other V1-required flows in this same document:**
 > - **`Household`** and **`Student`** — required by §2.3/§12 for multi-child parents; `Membership` should reference `Student`, not just `ParentProfile`, so a child's participation is tracked per class even when the paying parent varies.
 > - **`Invite`** — §16.1's funnel ("Invite created → Invite opened → Parent signed up") has no entity to attach those events to today; needs id, class/pool ref, channel, created-by, opened-at, converted-at.
-> - **`ClassReserve` moved from "Later" to V1** — §9.4 and §10's year-end reuse both depend on it in the V1 flow (§17.1, step 41: "Unused extras move to Class Reserve"), so it can't be deferred without contradicting the V1 build order already in the original doc.
+> - **`ClassReserve` moved from "Later" to V1** — §9.4 and §10's year-end reuse both depend on it in the V1 flow (§17.1, step 41: "Unused extras move to Class Reserve"), so it can't be deferred without contradicting the V1 build order already in the original doc. Needs a `custodianLocation` field per the §9.4 physical-custody update, and can be scoped to either a `Classroom` or a `School` (for the stranded-reserve donate-up case).
+> - **`Transfer` moved from "Later" to V1** — needed for the §9.4 stranded-reserve rule (moving reserve from a graduating class up to school-level, or across to next year's incoming class); the original only lists it as a later entity for the used-item marketplace, but the mechanism is identical and needed sooner.
 > - **`OrganizerStripeAccount`** (or equivalent) to back the §8.4 Stripe Connect decision — tracks the organizer's connected account id/status per class, separate from `Payment`.
 
 ### 13.2 Requirement state machine
@@ -395,6 +416,11 @@ Moat is the structured fulfillment graph and data from completed pools, not the 
 | 14 | "Fake class" fraud control is optional despite gating real payments | §14 |
 | 15 | No FERPA/student-data-source compliance note | §14 |
 | 16 | No accessibility standard | §14 |
+| 17 | No physical custody model for Class Reserve, or rule for stranded reserve at year-end/graduation | §9.4 |
+| 18 | No school/class deduplication workflow — direct threat to pooling network effect | §2.3 |
+| 19 | Self-reported inventory has no verification (documented as accepted risk, not a fix) | §4 |
+| 20 | Substitution/equivalence rules for "equivalent_allowed" items have no authoring workflow | §6 |
+| 21 | Physical distribution labor (pack-splitting, per-household counting) undesigned; organizer-burnout risk to viral loop | §9 |
 
 ---
 
