@@ -3,10 +3,11 @@ info:
   title: ClassPool API
   version: "0.1.0"
   description: >
-    Phase 1 (PWA shell + auth) and Phase 2 (schools/classes/memberships) of the
-    V1 build order — see ARCHITECTURE.md §4 and docs/PRD.md §17.3.
-    Source of truth for both apps/api (implements this) and apps/web
-    (generates its TS client from this via openapi-typescript).
+    Phase 1 (PWA shell + auth), Phase 2 (schools/classes/memberships), and
+    Phase 3 (manual requirements — no AI yet) of the V1 build order — see
+    ARCHITECTURE.md §4 and docs/PRD.md §17.3. Source of truth for both
+    apps/api (implements this) and apps/web (generates its TS client from
+    this via openapi-typescript).
 servers:
   - url: /api/v1
 
@@ -235,6 +236,148 @@ paths:
         "401": { description: Not authenticated }
         "404": { description: Invite not found or expired }
 
+  /classrooms/{classroomId}/pools:
+    post:
+      operationId: createPool
+      summary: >
+        Start a new pool on a classroom (PRD §2.3 — "a class can run multiple
+        pools per year"). Organizer/co-organizer only. Starts in DRAFT
+        (PRD §13.3).
+      parameters:
+        - $ref: "#/components/parameters/ClassroomId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, example: "Fall Supplies" }
+                poolType: { type: string, default: SUPPLIES }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pool" }
+        "403": { description: Caller is not an organizer on this classroom }
+    get:
+      operationId: listPoolsForClassroom
+      summary: All pools for a classroom, most recent first. Any member may view.
+      parameters:
+        - $ref: "#/components/parameters/ClassroomId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Pool" }
+        "403": { description: Caller has no Membership on this classroom }
+
+  /pools/{poolId}:
+    get:
+      operationId: getPool
+      summary: >
+        Fetch a pool and its requirements. Returns 403 unless the caller has
+        a Membership on the pool's classroom (same tenant-isolation bar as
+        GET /classrooms/{classroomId} — PRD §14).
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PoolDetail" }
+        "403": { description: Caller has no Membership on this pool's classroom }
+        "404": { description: Not found }
+
+  /pools/{poolId}/requirements:
+    post:
+      operationId: addRequirement
+      summary: >
+        Manually add a requirement to the pool (PRD §3 Phase 3 — "complete a
+        supply list without AI"). Organizer/co-organizer only. Starts in
+        EXTRACTED state with no confidence score (manual entries are never
+        scored — PRD §3.2 update: manual entry is a permanent parallel path,
+        not just a pre-AI placeholder).
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRequirementRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Requirement" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "Pool is no longer in DRAFT — requirements are locked once confirmed" }
+
+  /pools/{poolId}/requirements/{requirementId}:
+    patch:
+      operationId: updateRequirement
+      summary: >
+        Edit a requirement (the "Correct" action — PRD §3.3). Organizer/
+        co-organizer only, and only while the pool is still DRAFT.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - $ref: "#/components/parameters/RequirementId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRequirementRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Requirement" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: Pool is no longer in DRAFT }
+    delete:
+      operationId: removeRequirement
+      summary: Remove a requirement (the "Remove" action — PRD §3.3). Same authorization/state rules as edit.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - $ref: "#/components/parameters/RequirementId"
+      responses:
+        "204": { description: Removed }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: Pool is no longer in DRAFT }
+
+  /pools/{poolId}/confirm:
+    post:
+      operationId: confirmPool
+      summary: >
+        Organizer confirms the requirement list is ready (PRD §3.3 —
+        "nothing is financially actionable until a human organizer
+        verifies"). Requires at least one requirement. Moves every
+        requirement EXTRACTED/NEEDS_REVIEW → CONFIRMED, then the pool
+        DRAFT → OPEN_FOR_INVENTORY (PRD §13.2/§13.3's stated mapping: a pool
+        can't leave DRAFT until every requirement in it is at least
+        CONFIRMED). `confirmedStudentCount` is the number of distinct
+        students already joined to the classroom at confirm time — PRD §3.4's
+        "confirmed number of participating students" — used to compute each
+        requirement's aggregate class demand, returned per-requirement here.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PoolDetail" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "Pool already confirmed, or has zero requirements" }
+
   /household/dashboard:
     get:
       operationId: getHouseholdDashboard
@@ -261,6 +404,16 @@ components:
   parameters:
     ClassroomId:
       name: classroomId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PoolId:
+      name: poolId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RequirementId:
+      name: requirementId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -322,6 +475,10 @@ components:
         teacherLabel: { type: string }
         studentCountEstimate: { type: integer, nullable: true }
         createdAt: { type: string, format: date-time }
+        pools:
+          type: array
+          description: Summary of this classroom's pools, most recent first — lets the household dashboard show pool state without a second call per classroom.
+          items: { $ref: "#/components/schemas/Pool" }
 
     Invite:
       type: object
@@ -356,3 +513,54 @@ components:
         memberships:
           type: array
           items: { $ref: "#/components/schemas/Membership" }
+
+    Pool:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        classroomId: { type: string, format: uuid }
+        name: { type: string }
+        poolType: { type: string }
+        state:
+          type: string
+          enum: [DRAFT, OPEN_FOR_INVENTORY, OPEN_FOR_CONTRIBUTIONS, RECONCILING, PURCHASE_PROPOSED, PAYMENT_OPEN, ORDERED, DISTRIBUTING, COMPLETED]
+        requirementCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+
+    PoolDetail:
+      allOf:
+        - $ref: "#/components/schemas/Pool"
+        - type: object
+          properties:
+            requirements:
+              type: array
+              items: { $ref: "#/components/schemas/Requirement" }
+
+    Requirement:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        poolId: { type: string, format: uuid }
+        name: { type: string }
+        quantityPerStudent: { type: integer }
+        brand: { type: string, nullable: true }
+        strictness: { type: string, enum: [EXACT, EQUIVALENT_ALLOWED, GENERIC] }
+        state:
+          type: string
+          enum: [EXTRACTED, NEEDS_REVIEW, CONFIRMED, POOLING, LOCKED, PURCHASING, FULFILLED, CLOSED]
+        sourceEvidence: { type: string, nullable: true, description: "Null for manual entries — only AI extraction (Phase 11) populates this." }
+        confidence: { type: number, nullable: true, description: "Null for manual entries — PRD §3.2 update." }
+        totalDemand:
+          type: integer
+          nullable: true
+          description: "quantityPerStudent × confirmedStudentCount, set once the pool is confirmed (PRD §3.4). Null before confirmation."
+        createdAt: { type: string, format: date-time }
+
+    CreateRequirementRequest:
+      type: object
+      required: [name, quantityPerStudent]
+      properties:
+        name: { type: string, example: "Glue Stick" }
+        quantityPerStudent: { type: integer, minimum: 1, example: 4 }
+        brand: { type: string, nullable: true, example: "Elmer's" }
+        strictness: { type: string, enum: [EXACT, EQUIVALENT_ALLOWED, GENERIC], default: EQUIVALENT_ALLOWED }
