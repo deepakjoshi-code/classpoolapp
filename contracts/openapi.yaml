@@ -378,6 +378,83 @@ paths:
         "403": { description: Caller is not an organizer on this pool's classroom }
         "409": { description: "Pool already confirmed, or has zero requirements" }
 
+  /pools/{poolId}/inventory:
+    get:
+      operationId: getMyInventory
+      summary: >
+        "Shop Your Home First" (PRD §4) — the caller's own household
+        inventory status for every requirement in this pool, one line per
+        (requirement, student they have in this classroom). Only meaningful
+        once the pool has left DRAFT (requirements are CONFIRMED with a
+        known quantityPerStudent); returns an empty array for a still-DRAFT
+        pool rather than an error. Any member may call this for their own
+        household — there is nothing to view for anyone else's.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/InventoryLine" }
+        "403": { description: Caller has no Membership on this pool's classroom }
+
+  /pools/{poolId}/requirements/{requirementId}/inventory:
+    put:
+      operationId: setInventory
+      summary: >
+        Record how many of this requirement the caller's student already
+        owns (PRD §4's quick +/- stepper) — upsert, one row per
+        (requirement, student). `ownedQuantity` is clamped to
+        `[0, quantityPerStudent]` server-side (owning more than required
+        doesn't reduce anyone else's demand — surplus offering is a
+        separate, later action per PRD §5, not implied by a high inventory
+        number here). Caller must have a Membership on this pool's
+        classroom for the given `studentId` — never lets one household
+        record inventory for another's child.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - $ref: "#/components/parameters/RequirementId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [studentId, ownedQuantity]
+              properties:
+                studentId: { type: string, format: uuid }
+                ownedQuantity: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InventoryLine" }
+        "403": { description: "Caller has no Membership on this classroom for that student" }
+        "409": { description: "Pool is still DRAFT — nothing to record inventory against yet" }
+
+  /pools/{poolId}/inventory/summary:
+    get:
+      operationId: getInventorySummary
+      summary: >
+        Organizer dashboard aggregate (PRD §12.3 — "Inventory completed
+        19/25"): how many of the classroom's students have at least one
+        inventory line recorded, out of the total joined, plus per-requirement
+        totals already owned across every household. Organizer/co-organizer
+        only.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InventorySummary" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+
   /household/dashboard:
     get:
       operationId: getHouseholdDashboard
@@ -564,3 +641,34 @@ components:
         quantityPerStudent: { type: integer, minimum: 1, example: 4 }
         brand: { type: string, nullable: true, example: "Elmer's" }
         strictness: { type: string, enum: [EXACT, EQUIVALENT_ALLOWED, GENERIC], default: EQUIVALENT_ALLOWED }
+
+    InventoryLine:
+      type: object
+      properties:
+        requirementId: { type: string, format: uuid }
+        requirementName: { type: string }
+        quantityPerStudent: { type: integer }
+        studentId: { type: string, format: uuid }
+        studentFirstName: { type: string }
+        ownedQuantity: { type: integer }
+        stillNeeded:
+          type: integer
+          description: "max(0, quantityPerStudent - ownedQuantity) — PRD §4's 'Still needed'."
+
+    InventorySummary:
+      type: object
+      properties:
+        studentsWithInventorySubmitted: { type: integer }
+        totalJoinedStudents: { type: integer }
+        perRequirement:
+          type: array
+          items:
+            type: object
+            properties:
+              requirementId: { type: string, format: uuid }
+              requirementName: { type: string }
+              totalOwned: { type: integer }
+              totalRequired:
+                type: integer
+                nullable: true
+                description: Same as Requirement.totalDemand — null if the pool isn't confirmed yet.
