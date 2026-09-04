@@ -1,0 +1,358 @@
+openapi: 3.1.0
+info:
+  title: ClassPool API
+  version: "0.1.0"
+  description: >
+    Phase 1 (PWA shell + auth) and Phase 2 (schools/classes/memberships) of the
+    V1 build order — see ARCHITECTURE.md §4 and docs/PRD.md §17.3.
+    Source of truth for both apps/api (implements this) and apps/web
+    (generates its TS client from this via openapi-typescript).
+servers:
+  - url: /api/v1
+
+security:
+  - sessionCookie: []
+
+paths:
+  /auth/magic-link/request:
+    post:
+      operationId: requestMagicLink
+      security: []
+      summary: Email a single-use sign-in link. Always 204, whether or not the email exists (no account enumeration).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "204": { description: Link sent if the address is valid; same response either way }
+
+  /auth/magic-link/verify:
+    get:
+      operationId: verifyMagicLink
+      security: []
+      summary: Exchange a magic-link token for a session. Token is single-use, 15-minute expiry.
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Session established
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "400": { description: Token invalid, expired, or already used }
+
+  /auth/google/callback:
+    get:
+      operationId: googleOAuthCallback
+      security: []
+      summary: OAuth2 redirect target (Spring Security OAuth2 Client), exchanges Google's code for a session.
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Session established
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+
+  /auth/logout:
+    post:
+      operationId: logout
+      responses:
+        "204": { description: Session cleared }
+
+  /me:
+    get:
+      operationId: getCurrentUser
+      summary: Current user plus a summary of their household's classroom memberships (PRD §12 multi-class HOME update).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CurrentUser" }
+        "401": { description: Not authenticated }
+
+  /schools/search:
+    get:
+      operationId: searchSchools
+      summary: Fuzzy match against existing schools, for the dedup-check-before-create flow (PRD §2.3 update).
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/School" }
+
+  /schools:
+    post:
+      operationId: createSchool
+      summary: Create a new school record. Client is expected to have called /schools/search first and confirmed no match.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/School" }
+
+  /classrooms:
+    post:
+      operationId: createClassroom
+      summary: >
+        Create a class and become its organizer (Membership.role = ORGANIZER,
+        PRD §2.1). Also runs the classroom-level dedup fuzzy-match — see
+        `dedupWarning` on the response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateClassroomRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClassroomCreated" }
+
+  /classrooms/{classroomId}:
+    get:
+      operationId: getClassroom
+      summary: >
+        Fetch a classroom. Returns 403 unless the caller has a Membership on
+        this exact classroom — this endpoint is the primary target of PRD
+        §14's tenant-isolation authorization test.
+      parameters:
+        - $ref: "#/components/parameters/ClassroomId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Classroom" }
+        "403": { description: Caller has no Membership on this classroom }
+        "404": { description: Not found }
+
+  /classrooms/{classroomId}/invites:
+    post:
+      operationId: createInvite
+      summary: Generate a join link + QR payload for this classroom. Organizer/co-organizer only.
+      parameters:
+        - $ref: "#/components/parameters/ClassroomId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                channel: { type: string, enum: [EMAIL, SMS, LINK, QR] }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invite" }
+        "403": { description: Caller is not an organizer on this classroom }
+
+  /invites/{token}:
+    get:
+      operationId: previewInvite
+      security: []
+      summary: Public preview shown before auth — school/class context + participation progress (PRD §2.2).
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvitePreview" }
+        "404": { description: Invite not found or expired }
+
+  /invites/{token}/join:
+    post:
+      operationId: joinViaInvite
+      summary: >
+        Authenticated parent joins the classroom for one student. Creates a
+        Household on first join if the user has none, creates the Student,
+        creates a PARENT Membership, marks the Invite converted. If the
+        classroom's pool has already left OPEN_FOR_CONTRIBUTIONS, the
+        resulting Membership is flagged `lateJoin: true` (PRD §13.3 update).
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [studentFirstName]
+              properties:
+                studentFirstName: { type: string, minLength: 1 }
+      responses:
+        "201":
+          description: Joined
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Membership" }
+        "401": { description: Not authenticated }
+        "404": { description: Invite not found or expired }
+
+  /household/dashboard:
+    get:
+      operationId: getHouseholdDashboard
+      summary: >
+        Multi-class household view (PRD §12 update) — every classroom the
+        household's students belong to. Phase 1-2 scope: membership +
+        classroom context only, no pool financials yet (those land with
+        later phases).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HouseholdDashboard" }
+        "401": { description: Not authenticated }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: CLASSPOOL_SESSION
+
+  parameters:
+    ClassroomId:
+      name: classroomId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  schemas:
+    Session:
+      type: object
+      properties:
+        userId: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+
+    CurrentUser:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        householdId: { type: string, format: uuid, nullable: true }
+        memberships:
+          type: array
+          items: { $ref: "#/components/schemas/Membership" }
+
+    School:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+
+    CreateClassroomRequest:
+      type: object
+      required: [schoolYearLabel, grade, teacherLabel]
+      properties:
+        schoolId: { type: string, format: uuid, nullable: true, description: "Omit to create a new school from schoolName" }
+        schoolName: { type: string, nullable: true }
+        schoolYearLabel: { type: string, example: "2026-2027" }
+        grade: { type: string, example: "Grade 1" }
+        teacherLabel: { type: string, example: "Ms. Smith" }
+        teacherEmail: { type: string, format: email, nullable: true }
+        studentCountEstimate: { type: integer, nullable: true }
+
+    ClassroomCreated:
+      type: object
+      properties:
+        classroom: { $ref: "#/components/schemas/Classroom" }
+        dedupWarning:
+          type: array
+          nullable: true
+          description: Similar existing classrooms found — PRD §2.3 "Is this your class?" prompt. Null/empty if none found.
+          items: { $ref: "#/components/schemas/Classroom" }
+
+    Classroom:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        schoolId: { type: string, format: uuid }
+        schoolName: { type: string }
+        schoolYearLabel: { type: string }
+        grade: { type: string }
+        teacherLabel: { type: string }
+        studentCountEstimate: { type: integer, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    Invite:
+      type: object
+      properties:
+        token: { type: string }
+        joinUrl: { type: string, format: uri }
+        qrPayload: { type: string, description: "Data to render as a QR code, equal to joinUrl" }
+        channel: { type: string, enum: [EMAIL, SMS, LINK, QR] }
+
+    InvitePreview:
+      type: object
+      properties:
+        classroom: { $ref: "#/components/schemas/Classroom" }
+        membersJoinedCount: { type: integer }
+        studentCountEstimate: { type: integer, nullable: true }
+
+    Membership:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        classroomId: { type: string, format: uuid }
+        role: { type: string, enum: [PARENT, ORGANIZER, CO_ORGANIZER] }
+        studentId: { type: string, format: uuid, nullable: true }
+        studentFirstName: { type: string, nullable: true }
+        lateJoin: { type: boolean }
+        classroom: { $ref: "#/components/schemas/Classroom" }
+
+    HouseholdDashboard:
+      type: object
+      properties:
+        householdId: { type: string, format: uuid }
+        memberships:
+          type: array
+          items: { $ref: "#/components/schemas/Membership" }
