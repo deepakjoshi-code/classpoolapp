@@ -1,0 +1,50 @@
+/**
+ * Convenience re-exports of the OpenAPI-generated component schemas
+ * (contracts/openapi.yaml `components.schemas`). Import domain types from
+ * here rather than reaching into `generated/types.ts` directly, and never
+ * hand-write a parallel interface for something the contract already
+ * defines — regenerate via `npm run generate:api` instead.
+ */
+import type { components } from "./generated/types";
+
+export type Schemas = components["schemas"];
+
+/**
+ * Narrowing helper — and a flagged discrepancy against the contract.
+ *
+ * None of the *response* schemas in contracts/openapi.yaml declare a
+ * `required:` list, so per JSON Schema/OpenAPI 3.1 semantics every property
+ * openapi-typescript generates for them is optional (`prop?: T`), even
+ * though the field descriptions and worked examples in the spec clearly
+ * intend them to always be present (e.g. `Classroom.id`, `Membership.role`).
+ * Rather than hand-writing parallel "the real shape" interfaces (which is
+ * exactly the drift risk we're avoiding by generating from the contract) or
+ * editing openapi.yaml unilaterally, we apply one narrowing utility here, in
+ * our own code, at the single point where generated types become app types.
+ * `null` is preserved wherever the schema marks a field `nullable: true`
+ * (e.g. `teacherEmail`) — only the *missing-entirely* possibility is removed.
+ */
+type DeepRequired<T> = T extends (infer U)[]
+  ? DeepRequired<U>[]
+  : T extends object
+    ? { [K in keyof T]-?: DeepRequired<T[K]> }
+    : T;
+
+export type Session = DeepRequired<Schemas["Session"]>;
+export type CurrentUser = DeepRequired<Schemas["CurrentUser"]>;
+export type School = DeepRequired<Schemas["School"]>;
+export type ClassroomCreated = DeepRequired<Schemas["ClassroomCreated"]>;
+export type Classroom = DeepRequired<Schemas["Classroom"]>;
+export type Invite = DeepRequired<Schemas["Invite"]>;
+export type InvitePreview = DeepRequired<Schemas["InvitePreview"]>;
+export type Membership = DeepRequired<Schemas["Membership"]>;
+export type HouseholdDashboard = DeepRequired<Schemas["HouseholdDashboard"]>;
+
+/**
+ * Request body type — left exactly as generated. Unlike the responses above,
+ * this one already carries a real `required:` list in the contract
+ * (schoolYearLabel, grade, teacherLabel), and the rest (schoolId vs.
+ * schoolName, teacherEmail, studentCountEstimate) are genuinely optional by
+ * design, not an omission — narrowing it would be wrong.
+ */
+export type CreateClassroomRequest = Schemas["CreateClassroomRequest"];
