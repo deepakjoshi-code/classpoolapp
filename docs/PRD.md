@@ -1,4 +1,4 @@
-# ClassPool — Product & Engineering Blueprint (v1.3)
+# ClassPool — Product & Engineering Blueprint (v1.4)
 
 Working specification — Web/PWA first
 Base document: *ClassPool Full Product & Engineering Blueprint* (original blueprint).
@@ -7,6 +7,8 @@ This revision is a PM pass over that original: gaps are called out inline as **`
 **v1.2 changes**: resolves physical custody of Class Reserve (previously undefined — see §9.4), plus a second gap pass covering class/school deduplication, substitution-equivalence authoring, self-reported-inventory trust, and organizer physical labor.
 
 **v1.3 changes**: adds a cash/check fallback for families without a card or digital wallet, since Stripe checkout (§8.4) otherwise excludes them entirely with no substitute — see §8.4.
+
+**v1.4 changes — a rigor pass, not just new gaps.** Two kinds of fix: (1) **structural** — §5, §7, §9, and §11 were cited throughout as §5.1–5.4, §7.1–7.4, §9.1–9.4, §11.1–11.4 but never actually carried those headings, so every such cross-reference in this document was previously unresolvable; all four sections now have real subsection headings that match. (2) **internal consistency** — checking earlier fixes against each other and against the original surfaced eight more gaps: a Payment Unlock Gate condition (§14) with no backing data field (§13.1), two undocumented state machines with no stated relationship (§13.3), a late-joiner rule that assumes a pool that's still open (§13.3), a stranded-reserve rule that assumes a successor class exists yet (§9.4), a silent-absorption rule that assumes a next pool exists to absorb into (§9.1), a combined household payment view that isn't actually payable as one transaction (§12), a monetization stage with no corresponding build-order feature (§7.4), and a Lend-item fix that needed to be marked against the original's own "later" scoping (§5.4).
 
 ---
 
@@ -115,15 +117,21 @@ States: Required quantity / Owned and retained / Owned surplus offered / Still n
 
 ## 5. Surplus Contributions and Exchange Pool
 
-**Offer surplus**: Donate/Give (default for consumables) · Lend (reusable goods, later) · Sell cheaply (uniforms, books, calculators, sports gear, later) · Keep extras (always available).
+### 5.1 Offer surplus
+Donate/Give (default for consumables) · Lend (reusable goods, later) · Sell cheaply (uniforms, books, calculators, sports gear, later) · Keep extras (always available).
 
-**Class exchange pool** allocates automatically — no one-to-one parent negotiation for ordinary consumables.
+### 5.2 Class exchange pool
+Allocates automatically — no one-to-one parent negotiation for ordinary consumables.
 
-**Privacy model**: aggregate contribution counts by default; organizer can see contributor identity for drop-off coordination; no public household-level inventory disclosure; **no open parent-to-parent chat in V1.**
+### 5.3 Privacy model
+Aggregate contribution counts by default; organizer can see contributor identity for drop-off coordination; no public household-level inventory disclosure; **no open parent-to-parent chat in V1.**
 
-**Contribution lifecycle**: `PLEDGED → RECEIVED → ALLOCATED → DISTRIBUTED`. Purchasing math must use confirmed (received), not pledged, surplus.
+### 5.4 Contribution lifecycle
+`PLEDGED → RECEIVED → ALLOCATED → DISTRIBUTED`. Purchasing math must use confirmed (received), not pledged, surplus.
 
 > 🔧 **PM UPDATE — the lifecycle above only fits consumables (Donate/Give). "Lend" is explicitly in scope (§5.1, and the whole Uniform/Costume/Sports pool types in §10) but has no return path.** A lent item that's never given back is a real, common failure mode (uniforms especially). Add lend-specific states: `PLEDGED → RECEIVED → ALLOCATED → DISTRIBUTED → RETURN_DUE → RETURNED` with `OVERDUE` and `LOST_OR_DAMAGED` as terminal/escalation states off `RETURN_DUE`. This also needs a due date and a reminder notification (§11.3).
+>
+> **Consistency note found in this pass**: §5.1 itself already marks Lend and Sell as "later," not V1 — so this state-machine addition is a data-model decision to make *now* (cheap: it's just enum states), not a claim that Lend ships in V1. When Lend does ship, the states already exist rather than needing a schema migration on top of whatever V1 shipped with. Nothing about V1 scope changes here.
 
 ---
 
@@ -145,20 +153,26 @@ Deterministic business logic, **not** LLM reasoning. Inputs: requirements, house
 
 ## 7. Bulk Purchase Optimization
 
+### 7.1 Pack-size optimization
 Optimize residual demand against retailer pack sizes rather than one retail unit per family.
 
 ```
 Need: 320 pencils
 A: 24-pack @ $4.99   B: 48-pack @ $8.49   C: 144-pack @ $18.99
-24x1 + 48x2 + 144x3 >= 320
+Find non-negative integers x1, x2, x3 such that: 24x1 + 48x2 + 144x3 >= 320
 minimize: cost + waste penalty + shipping
 ```
 
-Example: 6 kids × 5 markers = 30 needed. Independent shopping (6 × 12-packs) = 72 markers, 42 wasted. ClassPool (3 × 12-packs) = 36 markers, 6 wasted.
+### 7.2 Why group pack-splitting matters
+6 kids × 5 markers = 30 needed. Independent shopping (6 × 12-packs) = 72 markers, 42 wasted. ClassPool (3 × 12-packs) = 36 markers, 6 wasted.
 
-Inputs: pack qty, price, shipping, sales tax, delivery date, minimum order, retailer reliability, substitution eligibility, affiliate economics (later).
+### 7.3 Product-offer inputs
+Pack qty, price, shipping, sales tax, delivery date, minimum order, retailer reliability, substitution eligibility, affiliate economics (later).
 
-Sources: Amazon, Walmart, Target, Staples, Office Depot, Costco/Sam's Club, approved school suppliers, India-specific retailers later. Prefer official/affiliate APIs or supplier feeds; avoid unauthorized scraping where merchant terms prohibit it.
+### 7.4 Retail sources
+Amazon, Walmart, Target, Staples, Office Depot, Costco/Sam's Club, approved school suppliers, India-specific retailers later. Prefer official/affiliate APIs or supplier feeds; avoid unauthorized scraping where merchant terms prohibit it.
+
+> 🔧 **PM UPDATE — §16.4 names "V1 affiliate revenue on residual purchases" as the first monetization stage, but nothing in the V1 build order (§17.3) actually builds the mechanism that earns it.** Affiliate revenue only accrues if the organizer's purchase click-throughs an affiliate-tagged link — but §8.5 has the organizer buying externally on their own, with no described in-app "Buy on Amazon" button generating that click. Fix: the Purchase Plan screen (surfaced in Phase 8 of the build order) needs each `ProductOffer` to carry an affiliate-tagged outbound URL, and the organizer's "buy" action in Phase 10 should be a tracked click-through, not just a plan the organizer reads and independently shops from memory. Without this, "V1 affiliate revenue" in §16.4 is aspirational, not buildable as scoped.
 
 ---
 
@@ -177,7 +191,7 @@ Stripe (US), Razorpay/UPI (India, later). Never store raw card data. States: Pen
 > - Every parent payment screen shows an explicit disclosure: *"You're paying [Organizer name], the class organizer — not ClassPool."* This is both an honesty requirement and a liability boundary.
 > - This is what makes "Organizer purchases externally, ClassPool generates the plan" actually consistent end to end, and defers any marketplace-escrow model (ClassPool holding funds, refunding centrally) to the "Later — ClassPool checkout" stage in §8.5, where it belongs.
 
-> 🔧 **PM UPDATE — under-collection risk (missing).** Nothing in the original addresses what happens when the purchase plan is ready but not every family has paid by the deadline — extremely common for school fundraisers, and the organizer is a volunteer, not a merchant with working capital. V1 needs a **payment threshold gate**: the "Organizer purchases" action stays visible but shows a risk banner ("$212 of $1,056 still unpaid — 4 families") and requires an explicit organizer acknowledgment to proceed below a configurable threshold (default 90% collected). This doesn't solve the risk, but it stops the app from silently implying the organizer is covered when they aren't.
+> 🔧 **PM UPDATE — under-collection risk (missing).** Nothing in the original addresses what happens when the purchase plan is ready but not every family has paid by the deadline — extremely common for school fundraisers, and the organizer is a volunteer, not a merchant with working capital. V1 needs a **payment threshold gate**: the "Organizer purchases" action stays visible but shows a risk banner ("$212 of $1,056 still unpaid — 4 families") and requires an explicit organizer acknowledgment to proceed below a platform-set threshold (default 90% collected — set once at the platform level, not editable per-organizer, since letting an organizer lower their own safety threshold would defeat the point of having one). This doesn't solve the risk, but it stops the app from silently implying the organizer is covered when they aren't.
 
 > 🔧 **PM UPDATE — refund/cancellation triggers (missing).** Payment states already include Refunded/Partially Refunded, but no business rule triggers them. Minimum V1 rule: full refund if the child withdraws from class/school **before** the pool reaches `ORDERED`; no refund after `ORDERED` — instead the paid-for item is redirected into Class Reserve (§9.4) for reallocation or resale credit. This needs to exist before payments ship, not after the first support ticket.
 
@@ -187,11 +201,23 @@ Stripe (US), Razorpay/UPI (India, later). Never store raw card data. States: Pen
 
 ## 9. Ordering, Distribution and Class Reserve
 
-Organizer marks products ordered, attaches receipt, records substitutions, tracks short shipments/refunds. Distribution modes: classroom desks, school lobby/event pickup, household allocation bags with printable labels. Organizer marks each bundle Delivered; parents get notified.
+### 9.1 Purchase and receipt recording
+Organizer marks products ordered, attaches receipt, records substitutions, tracks short shipments/refunds.
 
-> 🔧 **PM UPDATE — the physical labor of distribution is under-designed, and organizer burnout is a direct threat to the viral loop (§16.3 depends on organizers repeating).** "Printable labels" is the only tool mentioned, but the actual work is: open a 144-pack, count out exactly the right number of pencils per household, and get it right for 25 families without mixing up bags. §18 even tracks "organizer effort" as a validation metric but nothing in the product reduces it. Add a **per-household pick list** — generated straight from the `Allocation` output, printable or exportable, listing exact quantities per bag in one pass ("Family A: 12 pencils, 2 notebooks, 4 glue sticks") — this already exists as data (§9.2's example), it just needs to be a first-class exportable artifact, not something the organizer reconstructs by hand from the dashboard.
+> 🔧 **PM UPDATE — post-purchase substitution workflow is named ("record substitutions made after optimizer proposal") but not specified.** When a SKU the optimizer priced goes out of stock and the organizer buys a different pack size/brand, the per-household bill parents already paid may no longer match what's distributed. V1 needs a concrete threshold, not just "record it": substitution is recorded against the `PurchasePlanLine`; if the resulting cost delta is **≤10% of that line's total, it's absorbed silently** (folded into the next pool's cost estimate, no re-billing); **above 10%, the organizer is prompted to either eat the difference or trigger a small top-up charge** to the affected households — never a manual side conversation with no record.
+>
+> **Consistency check found in this pass**: "absorbed silently, folded into the next pool's estimate" quietly assumes there *is* a next pool. For a graduating class's last-ever pool, there's nowhere to fold a small delta into — and the organizer isn't supposed to be out-of-pocket at all (§8.5, worked example §22 Phase 9). Fix: if `Classroom` has no successor pool expected (same signal used by §9.4's stranded-reserve prompt below), route *any* delta, even ≤10%, through the top-up path instead of silent absorption — "no next pool to hide it in" and "no organizer out-of-pocket" can't both hold otherwise.
 
-**Class reserve**: bulk overage becomes reusable reserve rather than waste; next pool consumes reserve before asking families to buy new.
+### 9.2 Distribution modes
+Classroom desks, school lobby/event pickup, household allocation bags with printable labels.
+
+### 9.3 Distribution checklist
+Organizer marks each household bundle Delivered. Parents receive a ready-for-pickup or delivered notification.
+
+> 🔧 **PM UPDATE — the physical labor of distribution is under-designed, and organizer burnout is a direct threat to the viral loop (§16.3 depends on organizers repeating).** "Printable labels" is the only tool mentioned, but the actual work is: open a 144-pack, count out exactly the right number of pencils per household, and get it right for 25 families without mixing up bags. §18 even tracks "organizer effort" as a validation metric but nothing in the product reduces it. Add a **per-household pick list** — generated straight from the `Allocation` output, printable or exportable, listing exact quantities per bag in one pass ("Family A: 12 pencils, 2 notebooks, 4 glue sticks") — this already exists as data, it just needs to be a first-class exportable artifact, not something the organizer reconstructs by hand from the dashboard.
+
+### 9.4 Class reserve
+Bulk overage becomes reusable reserve rather than waste; next pool consumes reserve before asking families to buy new.
 
 > 🔧 **PM UPDATE — physical custody of Class Reserve is undefined in the original, and it's a real gap: someone has to physically hold leftover inventory, and the app can't leave that implicit.** Worked example: residual demand is 10 pens, cheapest offer is a 20-pack, organizer buys one. Here's what happens to all 20, concretely:
 > - The `PurchasePlanLine` records qty=20. The **Allocation engine already assigned the 10 needed pens to specific households** before purchase (§6) — those 10 are what actually gets bagged: the organizer (or whoever receives the shipment) splits the pack, and the 10 allocated pens go into the normal distribution flow — classroom desks, lobby pickup, or labeled household bags per §9.2/9.3 — matching each household's `DistributionItem` record, same as every other item on the list. Nothing new there.
@@ -199,9 +225,7 @@ Organizer marks products ordered, attaches receipt, records substitutions, track
 > - **Default physical custodian: the classroom, not the organizer's home.** Recommend Class Reserve defaults to living in the teacher's classroom supply cabinet, not a volunteer parent's house, because: (a) the teacher is stable across a school year while the organizer role can turn over mid-year (§2.1's succession problem), (b) reserve items are consumed by kids at school, so the classroom is where they're needed anyway, (c) it avoids a parent's home quietly becoming an unofficial warehouse with no accountability if that parent moves or stops volunteering. This doesn't require the teacher to do anything beyond what teachers already do (maintain a supply shelf) — it's not new work, and it doesn't touch money or verification, so it doesn't conflict with "teacher never handles money" (§2.1).
 > - **Data model**: `ClassReserve` needs a `custodianLocation` field (free-text label like "Ms. Smith's classroom, supply cabinet") logged by the organizer at intake, not a literal tracked address. The organizer stays accountable for the *record* (what's in reserve, per §12's dashboard) even when the *physical* item sits in the classroom.
 > - **Next pool draws it down automatically**: when the next pool's residual-demand calculation runs (§6.1), `ClassReserveAvailable` is checked before the optimizer buys anything new — the 10 reserved pens reduce that pool's residual demand by 10, lowering everyone's bill, with no per-family credit for who originally "paid into" the reserve (it was already priced into last year's per-unit bulk cost, same equity logic as §8.3's need-based model).
-> - **Stranded reserve (graduating class / no next pool)**: if a class has no next pool — most commonly the graduating grade at year-end — reserve items don't have anywhere to roll forward to. Default rule: organizer is prompted at pool completion to either (a) donate remaining reserve to the school's general supply closet (logged as a `Transfer` to a school-level reserve rather than a class-level one — useful since `School` already sits above `Classroom` in the hierarchy, §2.3), or (b) hand it to next year's incoming class at the same grade if the school reuses supply lists. No family gets a refund for stranded reserve — it was priced in when purchased, same as above.
-
-> 🔧 **PM UPDATE — post-purchase substitution workflow is named ("record substitutions made after optimizer proposal") but not specified.** When a SKU the optimizer priced goes out of stock and the organizer buys a different pack size/brand, the per-household bill parents already paid may no longer match what's distributed. V1 needs a concrete threshold, not just "record it": substitution is recorded against the `PurchasePlanLine`; if the resulting cost delta is **≤10% of that line's total, it's absorbed silently** (folded into the next pool's cost estimate, no re-billing); **above 10%, the organizer is prompted to either eat the difference or trigger a small top-up charge** to the affected households — never a manual side conversation with no record.
+> - **Stranded reserve (graduating class / no next pool)**: if a class has no next pool — most commonly the graduating grade at year-end — reserve items don't have anywhere to roll forward to. Default rule: organizer is prompted at pool completion to either (a) donate remaining reserve to the school's general supply closet (logged as a `Transfer` to a school-level reserve rather than a class-level one — useful since `School` already sits above `Classroom` in the hierarchy, §2.3), or (b) hand it to next year's incoming class at the same grade **if that class already exists in the system at hand-off time** — it usually won't yet (§2.4 has next year's organizer creating it fresh, likely months later), so (a) donate-to-school is the practical V1 default and (b) is only reachable once ClassPool supports pre-creating a successor class ahead of its first pool, which isn't in V1 scope. No family gets a refund for stranded reserve — it was priced in when purchased, same as above.
 
 ---
 
@@ -215,13 +239,19 @@ Project / Costume / Book / Uniform / Sports / Party-Event / Classroom Contributi
 
 ## 11. Notifications and PWA / Home Screen Experience
 
+### 11.1 Why PWA first
+One codebase for iPhone, Android and desktop; installable to Home Screen, opens standalone.
+
+### 11.2 Manifest and app behavior
 PWA manifest: name/short_name/start_url/`display: standalone`/icons/theme. Installable, standalone chrome-free display, responsive safe areas, cached app shell + offline fallback, web push where supported, mobile-first touch targets.
 
-**Events**: class invite/new pool, complete inventory, contribution allocated, reuse period ending, payment due, purchase completed, bundle ready, pool completed + savings summary.
+### 11.3 Notification events
+Class invite/new pool, complete inventory, contribution allocated, reuse period ending, payment due, purchase completed, bundle ready, pool completed + savings summary.
 
-**Offline**: load app shell, show last-cached pool state, queue simple local inventory edits, sync carefully on reconnect. **No offline payments/commerce in V1.**
+> 🔧 **PM UPDATE — channel priority and consent, tying back to §2.2.** Default: web push (PWA) + email, on by default as part of joining a class (operational, not marketing). SMS is opt-in only, off by default, and only offered when a phone number was actually provided. "Lend item due back" reminder (from the §5.4 update) is added to this event list.
 
-> 🔧 **PM UPDATE — channel priority and consent, tying back to §2.2.** Default: web push (PWA) + email, on by default as part of joining a class (operational, not marketing). SMS is opt-in only, off by default, and only offered when a phone number was actually provided. "Lend item due back" reminder (from the §5 update) is added to this event list.
+### 11.4 Offline behavior
+Load app shell, show last-cached pool state, queue simple local inventory edits, sync carefully on reconnect. **No offline payments/commerce in V1.**
 
 ---
 
@@ -236,6 +266,8 @@ Mobile nav: `HOME | POOL | SHARE | ORDERS | PROFILE`
 **Platform admin console**: users/roles, schools/classes/pools, suppliers/catalog, transactions/refunds, flagged content, AI extraction failures, duplicate schools/classes, analytics, feature flags, audit trail.
 
 > 🔧 **PM UPDATE — HOME needs to be multi-class, not single-pool, per the §2.3 Household/Student update.** A parent with kids in two classes should land on a household-level view (all active pools, aggregated amount due, aggregated savings) with each pool as a card, not be dropped into one class's screen with no way to see the other. This is a direct consequence of adding `Household`/`Student` to the data model — the UI in the original doesn't yet reflect it.
+>
+> **Found while reconciling this against §8.4's payment model**: an aggregated "amount due" view creates an expectation of paying it in one action — but §8.4's Stripe Connect destination charges route to *one* organizer's account per charge, and two different classes almost always have two different organizers. A single "Pay $47.60" button spanning both would need to be two separate Stripe charges under the hood anyway. Resolution: the household view **shows** one combined total for a quick read of what's owed, but **paying** stays one pool (one organizer) at a time — tapping "Pay" from the combined view just walks the parent through each outstanding pool's checkout in sequence, it doesn't imply a single transaction.
 
 > 🔧 **PM UPDATE — Admin console needs one more row: organizer reassignment / escalation queue**, surfacing the inactive-organizer-with-pending-money case from the §2.1 update, plus a "reported class" queue feeding the trust/safety update in §14.
 
@@ -254,6 +286,7 @@ Later: `Supplier, AffiliateMerchant, SchoolSubscription, ClassReserve, UsedItemL
 > - **`ClassReserve` moved from "Later" to V1** — §9.4 and §10's year-end reuse both depend on it in the V1 flow (§17.1, step 41: "Unused extras move to Class Reserve"), so it can't be deferred without contradicting the V1 build order already in the original doc. Needs a `custodianLocation` field per the §9.4 physical-custody update, and can be scoped to either a `Classroom` or a `School` (for the stranded-reserve donate-up case).
 > - **`Transfer` moved from "Later" to V1** — needed for the §9.4 stranded-reserve rule (moving reserve from a graduating class up to school-level, or across to next year's incoming class); the original only lists it as a later entity for the used-item marketplace, but the mechanism is identical and needed sooner.
 > - **`OrganizerStripeAccount`** (or equivalent) to back the §8.4 Stripe Connect decision — tracks the organizer's connected account id/status per class, separate from `Payment`.
+> - **`School.approvedEmailDomains`** — found missing in this pass: §14's Payment Unlock Gate names "organizer's email matches an approved school domain" as one of three ways to unlock payments, but no field anywhere holds what a school's approved domain *is*. Needs a list field on `School` (e.g. `["lincolnelementary.edu"]`), seeded by whoever creates the `School` record or curated by ClassPool Admin — without it, that gate condition has nothing to check against and silently falls through to "never satisfied by domain," pushing every class onto teacher-verification or manual admin approval by default.
 
 ### 13.2 Requirement state machine
 `EXTRACTED → NEEDS_REVIEW → CONFIRMED → POOLING → LOCKED → PURCHASING → FULFILLED → CLOSED`
@@ -262,7 +295,15 @@ After purchasing begins, no silent changes — organizer edits create an explici
 ### 13.3 Pool state machine
 `DRAFT → OPEN_FOR_INVENTORY → OPEN_FOR_CONTRIBUTIONS → RECONCILING → PURCHASE_PROPOSED → PAYMENT_OPEN → ORDERED → DISTRIBUTING → COMPLETED`
 
+> 🔧 **PM UPDATE — these are two separate state machines and the original never says how they line up, which is exactly the kind of thing that reads fine in a spec and then causes a real "wait, which state are we actually in?" bug once two engineers build against it independently.** A `Pool` holds many `Requirement`s, each progressing on its own — so they can't be identical machines, but they do constrain each other and that constraint should be explicit:
+> - A `Pool` can't leave `DRAFT` until every `Requirement` in it is at least `CONFIRMED` (§3.3 — nothing is financially actionable pre-confirmation, which only makes sense if the pool can't be actionable pre-confirmation either).
+> - `Requirement.POOLING` spans `Pool.OPEN_FOR_INVENTORY` through `RECONCILING`.
+> - `Requirement` moves to `LOCKED` exactly when its `Pool` enters `PURCHASE_PROPOSED` — this is what "after purchasing begins, no silent changes" (above) actually anchors to.
+> - `Requirement.PURCHASING → FULFILLED` tracks `Pool.ORDERED → DISTRIBUTING`; `Requirement.CLOSED` when `Pool.COMPLETED`.
+
 > 🔧 **PM UPDATE — no state for a parent joining after `OPEN_FOR_CONTRIBUTIONS` has closed (the "late joiner" gap).** Common case: a family enrolls mid-term. Add an explicit rule rather than leaving it undefined: a `Membership` created after a pool leaves `OPEN_FOR_CONTRIBUTIONS` skips reuse/exchange entirely and is billed at the locked bulk-optimized per-unit price for a `LATE_JOIN` order line against the same `PurchasePlan` (or against `ClassReserve` first, if available) — it does not reopen reconciliation for everyone else.
+>
+> **Gap found within this fix**: it assumes an active `Pool` with a live `PurchasePlan` to attach to — but a family can just as easily join after the pool has already reached `COMPLETED` (e.g. enrolling over the summer, before next year's pool has even been created). There's no `PurchasePlan` to bill against at that point. Rule for that case: the new `Membership` is simply queued against `ClassReserve` (draws down whatever's already banked, per §9.4) and otherwise waits — no purchase is triggered on their behalf until the next `Pool` is created, at which point they're a normal on-time member of it, not a late joiner.
 
 ---
 
@@ -426,6 +467,16 @@ Moat is the structured fulfillment graph and data from completed pools, not the 
 | 20 | Substitution/equivalence rules for "equivalent_allowed" items have no authoring workflow | §6 |
 | 21 | Physical distribution labor (pack-splitting, per-household counting) undesigned; organizer-burnout risk to viral loop | §9 |
 | 22 | Stripe-only checkout excludes families with no card/digital wallet, with no fallback | §8.4 |
+| 23 | §5, §7, §9, §11 were cited as numbered subsections throughout but never actually had those headings — every such cross-reference was unresolvable | §5, §7, §9, §11 |
+| 24 | Payment Unlock Gate's "school-domain match" condition (§14) has no backing field on `School` | §13.1 |
+| 25 | Requirement and Pool state machines have no stated relationship to each other | §13.3 |
+| 26 | Late-joiner rule assumes an open pool with a live `PurchasePlan`; breaks if the pool is already `COMPLETED` | §13.3 |
+| 27 | Stranded-reserve rule's "hand to next year's class" option assumes that class already exists, which it usually won't | §9.4 |
+| 28 | Substitution "absorb silently, fold into next pool" breaks for a class's last-ever pool (no next pool to fold into) | §9.1 |
+| 29 | Combined multi-child household payment view implies one payment, but Stripe Connect requires one charge per organizer | §12 |
+| 30 | "V1 affiliate revenue" (§16.4) has no corresponding affiliate-link mechanism in the V1 build order | §7.4 |
+| 31 | Lend-item return states added without re-flagging that Lend itself is scoped "later," not V1 | §5.4 |
+| 32 | Under-collection payment threshold didn't say who sets it — needed to rule out organizer self-lowering it | §8.4 |
 
 ---
 
@@ -443,7 +494,7 @@ A concrete run through every phase of the V1 flow (§17.1), with every gap fix a
 
 **Phase 4 — Household inventory.** Each family runs the quick stepper (§4): *"Pens needed: 2 — how many do you already have?"* Class collectively already owns **5**. A family that never responds by deadline defaults to "0 owned" rather than blocking the other 9 (§4 update, adjacent).
 
-**Phase 5 — Exchange pool.** Families offer extras (default Donate/Give). 3 pens are pledged and physically handed to Priya, who marks them `RECEIVED` (§5). One pledge of 5 only delivers 2 — only those 2 move to `RECEIVED → ALLOCATED`; the other 3 stay `PLEDGED` and don't reduce demand (§5, pledged-vs-confirmed rule). Confirmed surplus = **3**.
+**Phase 5 — Exchange pool.** Families offer extras (default Donate/Give). 3 pens are pledged and physically handed to Priya, who marks them `RECEIVED` (§5.4). One pledge of 5 only delivers 2 — only those 2 move to `RECEIVED → ALLOCATED`; the other 3 stay `PLEDGED` and don't reduce demand (§5.4, pledged-vs-confirmed rule). Confirmed surplus = **3**.
 
 **Phase 6 — Residual demand.**
 ```
@@ -455,9 +506,9 @@ Tagged per household as self-fulfilled / pool-fulfilled / purchase-required — 
 
 **Phase 8 — Billing and payment.** The pack's cost is split only across the 6 families who actually need pens, proportional to units needed (~$0.71/pen at $8.49/pack) — the 8 leftover pens aren't billed to anyone separately; buying the whole pack was already the cheapest way to cover 12 (§7.1's waste-penalty logic). Each of the 6 pays via **Stripe Connect destination charge straight into Priya's own connected account** — never a ClassPool-held balance (§8.4) — with an explicit *"you're paying Priya, not ClassPool"* disclosure. At the deadline, 5 of 6 have paid; Priya sees a risk banner (*"$0.71 outstanding — Family F"*) and can proceed past the 90% threshold with an explicit acknowledgment, or wait (§8.4 update). A withdrawal before purchase gets a full refund out of Priya's Stripe balance (§8.4 update).
 
-**Phase 9 — Purchase.** Because payment happens before purchase in the pool state machine (§13.3), the parents' money is already in Priya's account by the time she buys — she isn't fronting her own cash. If her priced pack is out of stock, she buys an alternate and logs a substitution; a delta ≤10% of the line is absorbed silently, a larger one prompts her to eat it or request a top-up (§9 update).
+**Phase 9 — Purchase.** Because payment happens before purchase in the pool state machine (§13.3), the parents' money is already in Priya's account by the time she buys — she isn't fronting her own cash. If her priced pack is out of stock, she buys an alternate and logs a substitution; a delta ≤10% of the line is absorbed silently (unless this is the class's last-ever pool, in which case even a small delta triggers a top-up rather than having nowhere to fold into), a larger one prompts her to eat it or request a top-up (§9.1 update).
 
-**Phase 10 — Distribution.** The app generates a **per-household pick list** straight from the allocation (§9 update): *"Family A: 1 pen. Family B: 2 pens…"* summing to 12. Priya counts out exactly per the list, bags/labels for those 6 families, distributes via classroom desks or take-home bags, marks each Delivered. The **8 leftover pens go to Class Reserve**, physically kept in Ms. Smith's classroom cabinet — not Priya's home, since the organizer role can turn over mid-year while the classroom can't (§9.4 update) — logged with a `custodianLocation` note. A family enrolling after this pool closed skips reuse/exchange, is billed at the locked $0.71/pen rate, but the app checks Class Reserve first — so a late joiner needing 1–2 pens gets them free from the 8 already banked, no new purchase triggered (§13.3 update).
+**Phase 10 — Distribution.** The app generates a **per-household pick list** straight from the allocation (§9.3 update): *"Family A: 1 pen. Family B: 2 pens…"* summing to 12. Priya counts out exactly per the list, bags/labels for those 6 families, distributes via classroom desks or take-home bags, marks each Delivered. The **8 leftover pens go to Class Reserve**, physically kept in Ms. Smith's classroom cabinet — not Priya's home, since the organizer role can turn over mid-year while the classroom can't (§9.4 update) — logged with a `custodianLocation` note. A family enrolling after this pool closed skips reuse/exchange, is billed at the locked $0.71/pen rate, but the app checks Class Reserve first — so a late joiner needing 1–2 pens gets them free from the 8 already banked, no new purchase triggered (§13.3 update).
 
 **Phase 11 — Pool completed.** Shareable savings summary shown (§16.3). Priya's prompted to start the next pool; that pool's residual-demand calculation checks Class Reserve first, so the 8 banked pens reduce the next purchase automatically (§9.4). If this were the graduating class's last pool instead, Priya would be prompted to donate the reserve up to the school or hand it to next year's incoming class rather than let it strand (§9.4 update). If Priya had gone unresponsive with parent money already collected, any family could flag it for admin escalation/reassignment rather than the pool just stalling (§2.1 update).
 
