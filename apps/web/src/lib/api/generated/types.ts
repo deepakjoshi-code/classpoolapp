@@ -207,6 +207,93 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/classrooms/{classroomId}/pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All pools for a classroom, most recent first. Any member may view. */
+        get: operations["listPoolsForClassroom"];
+        put?: never;
+        /** Start a new pool on a classroom (PRD §2.3 — "a class can run multiple pools per year"). Organizer/co-organizer only. Starts in DRAFT (PRD §13.3). */
+        post: operations["createPool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch a pool and its requirements. Returns 403 unless the caller has a Membership on the pool's classroom (same tenant-isolation bar as GET /classrooms/{classroomId} — PRD §14). */
+        get: operations["getPool"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/requirements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manually add a requirement to the pool (PRD §3 Phase 3 — "complete a supply list without AI"). Organizer/co-organizer only. Starts in EXTRACTED state with no confidence score (manual entries are never scored — PRD §3.2 update: manual entry is a permanent parallel path, not just a pre-AI placeholder). */
+        post: operations["addRequirement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/requirements/{requirementId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a requirement (the "Remove" action — PRD §3.3). Same authorization/state rules as edit. */
+        delete: operations["removeRequirement"];
+        options?: never;
+        head?: never;
+        /** Edit a requirement (the "Correct" action — PRD §3.3). Organizer/ co-organizer only, and only while the pool is still DRAFT. */
+        patch: operations["updateRequirement"];
+        trace?: never;
+    };
+    "/pools/{poolId}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer confirms the requirement list is ready (PRD §3.3 — "nothing is financially actionable until a human organizer verifies"). Requires at least one requirement. Moves every requirement EXTRACTED/NEEDS_REVIEW → CONFIRMED, then the pool DRAFT → OPEN_FOR_INVENTORY (PRD §13.2/§13.3's stated mapping: a pool can't leave DRAFT until every requirement in it is at least CONFIRMED). `confirmedStudentCount` is the number of distinct students already joined to the classroom at confirm time — PRD §3.4's "confirmed number of participating students" — used to compute each requirement's aggregate class demand, returned per-requirement here. */
+        post: operations["confirmPool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/household/dashboard": {
         parameters: {
             query?: never;
@@ -283,6 +370,8 @@ export interface components {
             studentCountEstimate?: number | null;
             /** Format: date-time */
             createdAt?: string;
+            /** @description Summary of this classroom's pools, most recent first — lets the household dashboard show pool state without a second call per classroom. */
+            pools?: components["schemas"]["Pool"][];
         };
         Invite: {
             token?: string;
@@ -316,10 +405,62 @@ export interface components {
             householdId?: string;
             memberships?: components["schemas"]["Membership"][];
         };
+        Pool: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            classroomId?: string;
+            name?: string;
+            poolType?: string;
+            /** @enum {string} */
+            state?: "DRAFT" | "OPEN_FOR_INVENTORY" | "OPEN_FOR_CONTRIBUTIONS" | "RECONCILING" | "PURCHASE_PROPOSED" | "PAYMENT_OPEN" | "ORDERED" | "DISTRIBUTING" | "COMPLETED";
+            requirementCount?: number;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        PoolDetail: components["schemas"]["Pool"] & {
+            requirements?: components["schemas"]["Requirement"][];
+        };
+        Requirement: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            poolId?: string;
+            name?: string;
+            quantityPerStudent?: number;
+            brand?: string | null;
+            /** @enum {string} */
+            strictness?: "EXACT" | "EQUIVALENT_ALLOWED" | "GENERIC";
+            /** @enum {string} */
+            state?: "EXTRACTED" | "NEEDS_REVIEW" | "CONFIRMED" | "POOLING" | "LOCKED" | "PURCHASING" | "FULFILLED" | "CLOSED";
+            /** @description Null for manual entries — only AI extraction (Phase 11) populates this. */
+            sourceEvidence?: string | null;
+            /** @description Null for manual entries — PRD §3.2 update. */
+            confidence?: number | null;
+            /** @description quantityPerStudent × confirmedStudentCount, set once the pool is confirmed (PRD §3.4). Null before confirmation. */
+            totalDemand?: number | null;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        CreateRequirementRequest: {
+            /** @example Glue Stick */
+            name: string;
+            /** @example 4 */
+            quantityPerStudent: number;
+            /** @example Elmer's */
+            brand?: string | null;
+            /**
+             * @default EQUIVALENT_ALLOWED
+             * @enum {string}
+             */
+            strictness: "EXACT" | "EQUIVALENT_ALLOWED" | "GENERIC";
+        };
     };
     responses: never;
     parameters: {
         ClassroomId: string;
+        PoolId: string;
+        RequirementId: string;
     };
     requestBodies: never;
     headers: never;
@@ -657,6 +798,261 @@ export interface operations {
             };
             /** @description Invite not found or expired */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listPoolsForClassroom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                classroomId: components["parameters"]["ClassroomId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"][];
+                };
+            };
+            /** @description Caller has no Membership on this classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createPool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                classroomId: components["parameters"]["ClassroomId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @example Fall Supplies */
+                    name: string;
+                    /** @default SUPPLIES */
+                    poolType?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"];
+                };
+            };
+            /** @description Caller is not an organizer on this classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getPool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolDetail"];
+                };
+            };
+            /** @description Caller has no Membership on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    addRequirement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRequirementRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Requirement"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool is no longer in DRAFT — requirements are locked once confirmed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    removeRequirement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                requirementId: components["parameters"]["RequirementId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool is no longer in DRAFT */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateRequirement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                requirementId: components["parameters"]["RequirementId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRequirementRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Requirement"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool is no longer in DRAFT */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    confirmPool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolDetail"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool already confirmed, or has zero requirements */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

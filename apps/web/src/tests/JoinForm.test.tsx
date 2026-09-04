@@ -31,6 +31,7 @@ const membership: Membership = {
     teacherLabel: "Ms. Smith",
     studentCountEstimate: 24,
     createdAt: new Date().toISOString(),
+    pools: [],
   },
 };
 

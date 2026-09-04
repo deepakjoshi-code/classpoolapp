@@ -39,6 +39,9 @@ export type Invite = DeepRequired<Schemas["Invite"]>;
 export type InvitePreview = DeepRequired<Schemas["InvitePreview"]>;
 export type Membership = DeepRequired<Schemas["Membership"]>;
 export type HouseholdDashboard = DeepRequired<Schemas["HouseholdDashboard"]>;
+export type Pool = DeepRequired<Schemas["Pool"]>;
+export type PoolDetail = DeepRequired<Schemas["PoolDetail"]>;
+export type Requirement = DeepRequired<Schemas["Requirement"]>;
 
 /**
  * Request body type — left exactly as generated. Unlike the responses above,
@@ -48,3 +51,11 @@ export type HouseholdDashboard = DeepRequired<Schemas["HouseholdDashboard"]>;
  * design, not an omission — narrowing it would be wrong.
  */
 export type CreateClassroomRequest = Schemas["CreateClassroomRequest"];
+
+/**
+ * Also left exactly as generated, same reasoning: `CreateRequirementRequest`
+ * already declares `required: [name, quantityPerStudent]` in the contract,
+ * and `brand`/`strictness` are genuinely optional (strictness defaults to
+ * EQUIVALENT_ALLOWED server-side).
+ */
+export type CreateRequirementRequest = Schemas["CreateRequirementRequest"];

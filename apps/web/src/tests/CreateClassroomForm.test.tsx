@@ -28,6 +28,7 @@ const baseClassroom: Classroom = {
   teacherLabel: "Ms. Smith",
   studentCountEstimate: 24,
   createdAt: new Date().toISOString(),
+  pools: [],
 };
 
 async function fillRequiredFields() {

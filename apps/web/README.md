@@ -1,9 +1,10 @@
 # ClassPool — Web (PWA)
 
 Next.js 15 (App Router) + TypeScript PWA for ClassPool's parent/organizer-facing
-frontend. Covers Phase 1 (PWA shell + auth) and Phase 2 (schools/classes/
-memberships) of the V1 build order — see `../../ARCHITECTURE.md` §4 and
-`../../docs/PRD.md` §17.3.
+frontend. Covers Phase 1 (PWA shell + auth), Phase 2 (schools/classes/
+memberships), and Phase 3 (pools + manual requirement ingestion/verification)
+of the V1 build order — see `../../ARCHITECTURE.md` §4 and `../../docs/PRD.md`
+§17.3.
 
 ## Running it
 
@@ -50,6 +51,17 @@ Component tests live in `src/tests/` (Vitest + React Testing Library), per
   actually rendered and actionable, not silently discarded.
 - `JoinForm.test.tsx` — the join-via-invite step: student-name form → submit
   → calls `POST /invites/{token}/join`, plus a failure path.
+- `RequirementForm.test.tsx` — the manual add/edit requirement form (PRD
+  §3.3's Correct/Edit actions): renders all fields, asserts the strictness
+  `<select>` shows the three modes in plain language (not the raw
+  `EXACT`/`EQUIVALENT_ALLOWED`/`GENERIC` enum values), submits an add via
+  `POST`, edits via `PATCH` pre-filled with the existing values, and shows a
+  specific message on the pool-no-longer-DRAFT 409.
+- `ConfirmPoolAction.test.tsx` — the one-way confirm action: asserts the
+  actual `POST /pools/{id}/confirm` call is unreachable without first passing
+  through an explicit "this can't be undone" step, that the button is
+  disabled with zero requirements, and that both 409 cases (zero
+  requirements, already confirmed) render distinct, specific messages.
 
 ## API client — generated from the contract
 
@@ -117,6 +129,8 @@ local inventory edits" — not yet built, out of scope for Phase 1-2).
 | `/classrooms/new` | Create-a-class flow: school search/dedup → grade/teacher/year/count → handles `dedupWarning` |
 | `/classrooms/[id]/invite` | Join link + QR + one-tap share, shown right after creation |
 | `/join/[token]` | Public, pre-auth invite landing page → sign-in → student-name join step |
+| `/classrooms/[id]/pools/new` | Organizer/co-organizer only: name a pool ("Fall Supplies") and start it in `DRAFT` |
+| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3) |
 
 ## Known discrepancies / assumptions against the contract
 
@@ -155,7 +169,31 @@ Flagged here rather than editing `contracts/openapi.yaml` unilaterally:
 4. **Response schemas' missing `required:` lists** — see the `DeepRequired`
    note under "API client" above.
 5. **No mobile 5-tab nav (`HOME | POOL | SHARE | ORDERS | PROFILE`, PRD §12)
-   yet.** Only Phase 1-2 screens exist (auth, schools/classes/memberships);
-   POOL/ORDERS have no endpoints yet in this pass's contract, so building
-   nav items that lead nowhere seemed worse than omitting them. Add the full
-   tab bar once those phases land.
+   yet.** Phase 3 adds the POOL destination (`/pools/[id]`) but ORDERS still
+   has no endpoints in the contract, so a full persistent tab bar still seems
+   premature — add it once ORDERS lands too.
+6. **Strictness plain-language copy is our own interpretation.** PRD §3.3
+   only names the three modes tersely ("Exact item / Equivalent allowed /
+   Generic") — it doesn't give parent-facing copy for each. The label/hint
+   text in `src/lib/pool-labels.ts` ("Must match exactly" / "Any equivalent
+   brand or type is fine" / "Any item that fits the description works") is
+   this app's best-faith reading of what each mode should mean to a
+   non-technical parent, not text pulled from the PRD verbatim. Worth
+   confirming with product/copy before ship.
+7. **One "active" pool per classroom, by convention, not by contract.**
+   `Classroom.pools` can hold many pools (PRD §2.3: "a class can run
+   multiple pools per year"), but the household dashboard's `ClassroomCard`
+   only surfaces `pools[0]` (most recent, per the contract's ordering) as
+   "the" pool for that card, per the task's explicit guidance not to
+   over-build multi-pool-per-classroom UI for Phase 3. A classroom with two
+   simultaneously-active pools would only show one from the dashboard (the
+   other is still reachable by URL) — revisit if that becomes a real case.
+8. **No client-side role check gates viewing a pool, only managing one.**
+   `GET /pools/{poolId}` requires *some* Membership on the classroom (any
+   role), so any parent in the class can view a pool read-only — matching
+   the contract. `/pools/[id]` and `/classrooms/[id]/pools/new` check the
+   caller's own `Membership.role` (from `GET /me`) client-side to decide
+   whether to show management controls / allow pool creation, but this is a
+   UX nicety, not a security boundary — the API's 403s are the real
+   enforcement, same pattern as the rest of this app (PRD §14's tenant
+   isolation is a backend concern).

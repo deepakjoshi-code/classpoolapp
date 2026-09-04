@@ -90,6 +90,23 @@ export default function ClassroomInvitePage() {
         Share this with families to get them into the pool.
       </p>
       <InviteShare invite={state.invite} classroom={state.classroom} />
+
+      <div className="mt-8 rounded-lg border border-slate-200 bg-slate-50 p-4 text-center">
+        <h2 className="text-base font-semibold text-slate-900">
+          Next: build the supply list
+        </h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Start a pool to add what families need to bring — manually now,
+          from a photo or PDF later. Nothing is billed until you confirm it.
+        </p>
+        <a
+          href={`/classrooms/${classroomId}/pools/new`}
+          className="mt-3 inline-block rounded-lg bg-brand-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-900"
+        >
+          Start your first pool
+        </a>
+      </div>
+
       <a
         href="/"
         className="mt-6 block text-center text-sm font-medium text-brand-700 underline underline-offset-2 hover:text-brand-800"
