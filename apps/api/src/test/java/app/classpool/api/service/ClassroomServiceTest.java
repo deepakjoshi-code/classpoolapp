@@ -43,6 +43,8 @@ class ClassroomServiceTest {
     private MembershipRepository membershipRepository;
     @Mock
     private SchoolService schoolService;
+    @Mock
+    private HouseholdService householdService;
 
     private ClassroomService classroomService;
 
@@ -55,7 +57,8 @@ class ClassroomServiceTest {
         // ClassroomAssembler is exercised for real (it just needs school/schoolYear lookups),
         // no need to mock it separately — only its two repository collaborators.
         classroomService = new ClassroomService(classroomRepository, schoolYearRepository, membershipRepository,
-                schoolService, new ClassroomAssembler(schoolYearRepository, mock(app.classpool.api.repository.SchoolRepository.class)));
+                schoolService, householdService,
+                new ClassroomAssembler(schoolYearRepository, mock(app.classpool.api.repository.SchoolRepository.class)));
 
         school = new School("Lincoln Elementary");
         setId(school, UUID.randomUUID());
@@ -89,6 +92,11 @@ class ClassroomServiceTest {
         assertThat(persisted.getRole()).isEqualTo(MembershipRole.ORGANIZER);
         assertThat(persisted.getParentUserId()).isEqualTo(callerId);
         assertThat(persisted.getStudent()).isNull();
+
+        // Regression test for a real bug found in live integration testing: an organizer with no
+        // child in their own class had no Household, so /household/dashboard 404'd for them.
+        // Every classroom creation must ensure the creator has a household to be found in.
+        verify(householdService).getOrCreateHousehold(callerId);
     }
 
     @Test

@@ -13,7 +13,6 @@ import app.classpool.api.dto.MembershipResponse;
 import app.classpool.api.exception.ForbiddenException;
 import app.classpool.api.exception.NotFoundException;
 import app.classpool.api.exception.UnauthorizedException;
-import app.classpool.api.repository.HouseholdRepository;
 import app.classpool.api.repository.InviteRepository;
 import app.classpool.api.repository.MembershipRepository;
 import app.classpool.api.repository.StudentRepository;
@@ -37,7 +36,7 @@ public class InviteService {
     private final InviteRepository inviteRepository;
     private final ClassroomService classroomService;
     private final MembershipRepository membershipRepository;
-    private final HouseholdRepository householdRepository;
+    private final HouseholdService householdService;
     private final StudentRepository studentRepository;
     private final ClassroomAssembler classroomAssembler;
     private final MembershipAssembler membershipAssembler;
@@ -45,14 +44,14 @@ public class InviteService {
     private final String webBaseUrl;
 
     public InviteService(InviteRepository inviteRepository, ClassroomService classroomService,
-                          MembershipRepository membershipRepository, HouseholdRepository householdRepository,
+                          MembershipRepository membershipRepository, HouseholdService householdService,
                           StudentRepository studentRepository, ClassroomAssembler classroomAssembler,
                           MembershipAssembler membershipAssembler, PoolGateway poolGateway,
                           @Value("${classpool.web-base-url}") String webBaseUrl) {
         this.inviteRepository = inviteRepository;
         this.classroomService = classroomService;
         this.membershipRepository = membershipRepository;
-        this.householdRepository = householdRepository;
+        this.householdService = householdService;
         this.studentRepository = studentRepository;
         this.classroomAssembler = classroomAssembler;
         this.membershipAssembler = membershipAssembler;
@@ -99,8 +98,7 @@ public class InviteService {
                 .orElseThrow(() -> new NotFoundException("Invite not found or expired"));
         Classroom classroom = classroomService.getEntityOrThrow(invite.getClassroomId());
 
-        Household household = householdRepository.findByPrimaryParentId(callerUserId)
-                .orElseGet(() -> householdRepository.save(new Household(callerUserId)));
+        Household household = householdService.getOrCreateHousehold(callerUserId);
         Student student = studentRepository.save(new Student(household.getId(), studentFirstName.trim()));
 
         boolean lateJoin = poolGateway.hasPoolPastOpenForContributions(classroom.getId());

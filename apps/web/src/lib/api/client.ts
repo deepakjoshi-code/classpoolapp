@@ -11,6 +11,17 @@ import type { paths } from "./generated/types";
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 
 /**
+ * The API's origin with no `/api/v1` suffix — needed for endpoints the
+ * backend serves outside that prefix, e.g. Spring Security's conventional
+ * `/oauth2/authorization/{registrationId}` login-kickoff redirect (see
+ * SignInForm.tsx). Bug found during integration: SignInForm previously built
+ * this URL as `${API_BASE_URL}/oauth2/authorization/google`, which resolves
+ * to `.../api/v1/oauth2/authorization/google` and 404s, since the backend
+ * registers that route at its root, not under /api/v1.
+ */
+const API_ORIGIN = API_BASE_URL.replace(/\/api\/v1\/?$/, "");
+
+/**
  * Thin typed fetch wrapper around the OpenAPI-generated types
  * (src/lib/api/generated/types.ts). This is the ONLY place that should call
  * fetch() against the ClassPool API — every request/response shape below is
@@ -25,4 +36,4 @@ export const api = createClient<paths>({
   credentials: "include",
 });
 
-export { API_BASE_URL };
+export { API_BASE_URL, API_ORIGIN };

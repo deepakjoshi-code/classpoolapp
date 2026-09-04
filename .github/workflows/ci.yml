@@ -1,0 +1,188 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (build + unit + integration tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          # Root-level pom so `cache: maven` finds it without extra config.
+          # (See apps/api/pom.xml — the actual project.)
+
+      - name: Run tests (Testcontainers pulls its own Postgres/Redis)
+        working-directory: apps/api
+        run: mvn -B test
+
+      - name: Build jar
+        working-directory: apps/api
+        run: mvn -B -DskipTests package
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-surefire-reports
+          path: apps/api/target/surefire-reports
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: api-jar
+          path: apps/api/target/*.jar
+          retention-days: 1
+
+  frontend:
+    name: Frontend (typecheck + unit tests + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Regenerate API types and verify they're in sync with the contract
+        working-directory: apps/web
+        run: |
+          npm run generate:api
+          git diff --exit-code -- src/lib/api/generated/ || {
+            echo "::error::apps/web/src/lib/api/generated/ is out of sync with contracts/openapi.yaml — run 'npm run generate:api' in apps/web and commit the result.";
+            exit 1;
+          }
+
+      - name: Typecheck
+        working-directory: apps/web
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        working-directory: apps/web
+        run: npm test -- --run
+
+      - name: Build
+        working-directory: apps/web
+        run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: apps/web/.next
+          retention-days: 1
+
+  e2e:
+    name: End-to-end (Playwright, both apps live)
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: classpool
+          POSTGRES_USER: classpool
+          POSTGRES_PASSWORD: classpool_dev
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U classpool"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Download API jar
+        uses: actions/download-artifact@v4
+        with:
+          name: api-jar
+          path: apps/api/target
+
+      - name: Start backend
+        env:
+          SESSION_COOKIE_SECURE: "false"
+          WEB_BASE_URL: "http://localhost:3000"
+        run: |
+          nohup java -jar apps/api/target/*.jar > api.log 2>&1 &
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/v1/me || echo "000")
+            [ "$code" = "401" ] && echo "backend up" && exit 0
+            sleep 2
+          done
+          echo "::error::backend did not come up in time"; cat api.log; exit 1
+
+      - name: Install frontend deps and start it
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_API_BASE_URL: "http://localhost:8080/api/v1"
+        run: |
+          npm ci
+          npm run build
+          nohup npm start -- -p 3000 > ../web.log 2>&1 &
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/ || echo "000")
+            [ "$code" = "200" ] && echo "frontend up" && exit 0
+            sleep 2
+          done
+          echo "::error::frontend did not come up in time"; cat ../web.log; exit 1
+
+      - name: Install Playwright
+        working-directory: e2e
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        working-directory: e2e
+        env:
+          API_LOG_FILE: ../api.log
+          WEB_BASE_URL: "http://localhost:3000"
+        run: npx playwright test
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: app-logs
+          path: |
+            api.log
+            web.log
+          retention-days: 7

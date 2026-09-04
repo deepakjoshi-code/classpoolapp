@@ -9,7 +9,6 @@ import app.classpool.api.domain.Student;
 import app.classpool.api.dto.MembershipResponse;
 import app.classpool.api.exception.ForbiddenException;
 import app.classpool.api.exception.NotFoundException;
-import app.classpool.api.repository.HouseholdRepository;
 import app.classpool.api.repository.InviteRepository;
 import app.classpool.api.repository.MembershipRepository;
 import app.classpool.api.repository.StudentRepository;
@@ -39,7 +38,7 @@ class InviteServiceTest {
     @Mock
     private MembershipRepository membershipRepository;
     @Mock
-    private HouseholdRepository householdRepository;
+    private HouseholdService householdService;
     @Mock
     private StudentRepository studentRepository;
     @Mock
@@ -57,7 +56,7 @@ class InviteServiceTest {
     @BeforeEach
     void setUp() {
         inviteService = new InviteService(inviteRepository, classroomService, membershipRepository,
-                householdRepository, studentRepository, classroomAssembler, membershipAssembler, poolGateway,
+                householdService, studentRepository, classroomAssembler, membershipAssembler, poolGateway,
                 "http://localhost:3000");
     }
 
@@ -106,10 +105,9 @@ class InviteServiceTest {
         setId(classroom, classroomId);
         when(classroomService.getEntityOrThrow(classroomId)).thenReturn(classroom);
 
-        when(householdRepository.findByPrimaryParentId(callerId)).thenReturn(Optional.empty());
         Household newHousehold = new Household(callerId);
         setId(newHousehold, UUID.randomUUID());
-        when(householdRepository.save(any(Household.class))).thenReturn(newHousehold);
+        when(householdService.getOrCreateHousehold(callerId)).thenReturn(newHousehold);
 
         Student savedStudent = new Student(newHousehold.getId(), "Alex");
         setId(savedStudent, UUID.randomUUID());
@@ -127,7 +125,7 @@ class InviteServiceTest {
 
         assertThat(response.role()).isEqualTo("PARENT");
         assertThat(response.lateJoin()).isFalse();
-        verify(householdRepository).save(any(Household.class));
+        verify(householdService).getOrCreateHousehold(callerId);
 
         ArgumentCaptor<Invite> inviteCaptor = ArgumentCaptor.forClass(Invite.class);
         verify(inviteRepository).save(inviteCaptor.capture());
@@ -145,7 +143,7 @@ class InviteServiceTest {
 
         Household household = new Household(callerId);
         setId(household, UUID.randomUUID());
-        when(householdRepository.findByPrimaryParentId(callerId)).thenReturn(Optional.of(household));
+        when(householdService.getOrCreateHousehold(callerId)).thenReturn(household);
 
         Student savedStudent = new Student(household.getId(), "Jamie");
         setId(savedStudent, UUID.randomUUID());

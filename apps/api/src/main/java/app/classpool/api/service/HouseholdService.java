@@ -38,4 +38,18 @@ public class HouseholdService {
         List<MembershipResponse> membershipResponses = membershipAssembler.toResponses(memberships);
         return new HouseholdDashboardResponse(household.getId(), membershipResponses);
     }
+
+    /**
+     * Get-or-create, shared by every path that grants someone their first Membership
+     * (ClassroomService.create for organizers, InviteService.join for parents) — found during
+     * integration testing that ClassroomService wasn't calling this, so an organizer who created a
+     * class without also joining it as a parent had no Household and got a 404 from their own
+     * /household/dashboard. Both call sites now go through here so this can't silently drift apart
+     * again.
+     */
+    @Transactional
+    public Household getOrCreateHousehold(UUID callerUserId) {
+        return householdRepository.findByPrimaryParentId(callerUserId)
+                .orElseGet(() -> householdRepository.save(new Household(callerUserId)));
+    }
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { api, API_BASE_URL } from "@/lib/api/client";
+import { api, API_ORIGIN } from "@/lib/api/client";
 import { setPendingRedirect } from "@/lib/pending-redirect";
 
 type Mode = "form" | "sending" | "sent" | "error";
@@ -26,9 +26,9 @@ export function SignInForm({ redirectTo }: { redirectTo?: string }) {
     // (`/auth/google/callback`) but not an initiation route — that's
     // expected, since Spring Security OAuth2 Client serves the login-kickoff
     // redirect itself, by convention, at `/oauth2/authorization/{registrationId}`
-    // rather than as a JSON API operation. Flagged in the PR description as
-    // an assumption against the contract.
-    window.location.href = `${API_BASE_URL}/oauth2/authorization/google`;
+    // rather than as a JSON API operation. Uses API_ORIGIN, not API_BASE_URL —
+    // this route lives at the API's root, not under /api/v1.
+    window.location.href = `${API_ORIGIN}/oauth2/authorization/google`;
   }
 
   async function handleMagicLinkSubmit(event: FormEvent<HTMLFormElement>) {

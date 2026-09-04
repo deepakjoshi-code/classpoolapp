@@ -26,15 +26,17 @@ public class ClassroomService {
     private final SchoolYearRepository schoolYearRepository;
     private final MembershipRepository membershipRepository;
     private final SchoolService schoolService;
+    private final HouseholdService householdService;
     private final ClassroomAssembler classroomAssembler;
 
     public ClassroomService(ClassroomRepository classroomRepository, SchoolYearRepository schoolYearRepository,
                              MembershipRepository membershipRepository, SchoolService schoolService,
-                             ClassroomAssembler classroomAssembler) {
+                             HouseholdService householdService, ClassroomAssembler classroomAssembler) {
         this.classroomRepository = classroomRepository;
         this.schoolYearRepository = schoolYearRepository;
         this.membershipRepository = membershipRepository;
         this.schoolService = schoolService;
+        this.householdService = householdService;
         this.classroomAssembler = classroomAssembler;
     }
 
@@ -56,6 +58,11 @@ public class ClassroomService {
         // Creator becomes ORGANIZER (PRD §2.1) — not a distinct account type, a Membership row.
         // No student attached to this grant (organizers need not have a child in the class).
         membershipRepository.save(new Membership(classroom, callerUserId, null, MembershipRole.ORGANIZER, false));
+        // Every Membership grant must be backed by a Household so /household/dashboard (§12 update)
+        // never 404s for a legitimate member — see HouseholdService.getOrCreateHousehold's Javadoc
+        // for the bug this fixes (found live: an organizer with no child in their own class had no
+        // way to see the class they'd just created).
+        householdService.getOrCreateHousehold(callerUserId);
 
         ClassroomResponse classroomResponse = classroomAssembler.toResponse(classroom);
         List<ClassroomResponse> dedupWarning = similar.isEmpty()
