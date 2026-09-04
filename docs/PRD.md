@@ -197,7 +197,7 @@ Organizer marks products ordered, attaches receipt, records substitutions, track
 > - **Next pool draws it down automatically**: when the next pool's residual-demand calculation runs (§6.1), `ClassReserveAvailable` is checked before the optimizer buys anything new — the 10 reserved pens reduce that pool's residual demand by 10, lowering everyone's bill, with no per-family credit for who originally "paid into" the reserve (it was already priced into last year's per-unit bulk cost, same equity logic as §8.3's need-based model).
 > - **Stranded reserve (graduating class / no next pool)**: if a class has no next pool — most commonly the graduating grade at year-end — reserve items don't have anywhere to roll forward to. Default rule: organizer is prompted at pool completion to either (a) donate remaining reserve to the school's general supply closet (logged as a `Transfer` to a school-level reserve rather than a class-level one — useful since `School` already sits above `Classroom` in the hierarchy, §2.3), or (b) hand it to next year's incoming class at the same grade if the school reuses supply lists. No family gets a refund for stranded reserve — it was priced in when purchased, same as above.
 
-> 🔧 **PM UPDATE — post-purchase substitution workflow is named ("record substitutions made after optimizer proposal") but not specified.** When a SKU the optimizer priced goes out of stock and the organizer buys a different pack size/brand, the per-household bill parents already paid may no longer match what's distributed. V1 needs: substitution recorded against the `PurchasePlanLine`, delta (over/under) automatically flows to Class Reserve or triggers a partial refund — not a manual side conversation between organizer and parent.
+> 🔧 **PM UPDATE — post-purchase substitution workflow is named ("record substitutions made after optimizer proposal") but not specified.** When a SKU the optimizer priced goes out of stock and the organizer buys a different pack size/brand, the per-household bill parents already paid may no longer match what's distributed. V1 needs a concrete threshold, not just "record it": substitution is recorded against the `PurchasePlanLine`; if the resulting cost delta is **≤10% of that line's total, it's absorbed silently** (folded into the next pool's cost estimate, no re-billing); **above 10%, the organizer is prompted to either eat the difference or trigger a small top-up charge** to the affected households — never a manual side conversation with no record.
 
 ---
 
@@ -421,6 +421,40 @@ Moat is the structured fulfillment graph and data from completed pools, not the 
 | 19 | Self-reported inventory has no verification (documented as accepted risk, not a fix) | §4 |
 | 20 | Substitution/equivalence rules for "equivalent_allowed" items have no authoring workflow | §6 |
 | 21 | Physical distribution labor (pack-splitting, per-household counting) undesigned; organizer-burnout risk to viral loop | §9 |
+
+---
+
+## 22. Worked End-to-End Example (Pens, 10 Families)
+
+A concrete run through every phase of the V1 flow (§17.1), with every gap fix above shown in context rather than as an abstract rule. Numbers: 10 families, 2 pens/student requirement, only a 20-pack available on the market.
+
+**Phase 0 — Class created.** Priya (a parent) taps "Create a class." Typing the school name fuzzy-matches existing classes first (§2.3's dedup check) — no match, so "Lincoln Elementary / Ms. Smith / Grade 1" is created and Priya becomes `Membership.role = ORGANIZER` on it, not a separate account type (§2.1). Join link + QR generated.
+
+**Phase 1 — Parents join.** 10 families join via the link, auth with Google/Apple/magic-link. Each lands under `Household → Student → Membership` (§2.3) — a parent with two kids in the class just gets two `Student` rows under one `Household`.
+
+**Phase 2 — Requirement list verified.** Priya uploads a photo of the list. AI extracts *"Pens — qty 2/student — brand: any — strictness: `equivalent_allowed` — confidence: 0.94"* (§3.2). A low-confidence item would instead force manual entry, never a silent guess (§3.2 update). Priya confirms it. Requirement → `CONFIRMED`. Aggregate class demand = 2 × 10 = **20 pens**.
+
+**Phase 3 — Payment gate check.** Before this pool can ever collect money, the system checks organizer school-domain match / teacher verification / admin approval (§14 update). Ms. Smith taps "Verify" — gate satisfied now, before any money moves. Inventory and exchange work regardless of this gate; only payment collection is blocked without it.
+
+**Phase 4 — Household inventory.** Each family runs the quick stepper (§4): *"Pens needed: 2 — how many do you already have?"* Class collectively already owns **5**. A family that never responds by deadline defaults to "0 owned" rather than blocking the other 9 (§4 update, adjacent).
+
+**Phase 5 — Exchange pool.** Families offer extras (default Donate/Give). 3 pens are pledged and physically handed to Priya, who marks them `RECEIVED` (§5). One pledge of 5 only delivers 2 — only those 2 move to `RECEIVED → ALLOCATED`; the other 3 stay `PLEDGED` and don't reduce demand (§5, pledged-vs-confirmed rule). Confirmed surplus = **3**.
+
+**Phase 6 — Residual demand.**
+```
+TotalRequired (20) − Owned&Retained (5) − ConfirmedSurplus (3) − ClassReserve (0) = 12
+```
+Tagged per household as self-fulfilled / pool-fulfilled / purchase-required — works out to 6 of the 10 families needing pens purchased, 12 pens between them (§6).
+
+**Phase 7 — Bulk optimizer.** Only a 20-pack exists on the market; need ≥ 12 → buy one. Proposal: *1 × 20-pack, covers 12 needed, 8 to reserve* (§7). Priya reviews and approves.
+
+**Phase 8 — Billing and payment.** The pack's cost is split only across the 6 families who actually need pens, proportional to units needed (~$0.71/pen at $8.49/pack) — the 8 leftover pens aren't billed to anyone separately; buying the whole pack was already the cheapest way to cover 12 (§7.1's waste-penalty logic). Each of the 6 pays via **Stripe Connect destination charge straight into Priya's own connected account** — never a ClassPool-held balance (§8.4) — with an explicit *"you're paying Priya, not ClassPool"* disclosure. At the deadline, 5 of 6 have paid; Priya sees a risk banner (*"$0.71 outstanding — Family F"*) and can proceed past the 90% threshold with an explicit acknowledgment, or wait (§8.4 update). A withdrawal before purchase gets a full refund out of Priya's Stripe balance (§8.4 update).
+
+**Phase 9 — Purchase.** Because payment happens before purchase in the pool state machine (§13.3), the parents' money is already in Priya's account by the time she buys — she isn't fronting her own cash. If her priced pack is out of stock, she buys an alternate and logs a substitution; a delta ≤10% of the line is absorbed silently, a larger one prompts her to eat it or request a top-up (§9 update).
+
+**Phase 10 — Distribution.** The app generates a **per-household pick list** straight from the allocation (§9 update): *"Family A: 1 pen. Family B: 2 pens…"* summing to 12. Priya counts out exactly per the list, bags/labels for those 6 families, distributes via classroom desks or take-home bags, marks each Delivered. The **8 leftover pens go to Class Reserve**, physically kept in Ms. Smith's classroom cabinet — not Priya's home, since the organizer role can turn over mid-year while the classroom can't (§9.4 update) — logged with a `custodianLocation` note. A family enrolling after this pool closed skips reuse/exchange, is billed at the locked $0.71/pen rate, but the app checks Class Reserve first — so a late joiner needing 1–2 pens gets them free from the 8 already banked, no new purchase triggered (§13.3 update).
+
+**Phase 11 — Pool completed.** Shareable savings summary shown (§16.3). Priya's prompted to start the next pool; that pool's residual-demand calculation checks Class Reserve first, so the 8 banked pens reduce the next purchase automatically (§9.4). If this were the graduating class's last pool instead, Priya would be prompted to donate the reserve up to the school or hand it to next year's incoming class rather than let it strand (§9.4 update). If Priya had gone unresponsive with parent money already collected, any family could flag it for admin escalation/reassignment rather than the pool just stalling (§2.1 update).
 
 ---
 
