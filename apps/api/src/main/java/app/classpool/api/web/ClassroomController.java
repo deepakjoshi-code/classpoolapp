@@ -5,15 +5,19 @@ import app.classpool.api.dto.ClassroomCreatedResponse;
 import app.classpool.api.dto.ClassroomResponse;
 import app.classpool.api.dto.CreateClassroomRequest;
 import app.classpool.api.dto.CreateInviteRequest;
+import app.classpool.api.dto.CreatePoolRequest;
 import app.classpool.api.dto.InviteResponse;
+import app.classpool.api.dto.PoolResponse;
 import app.classpool.api.exception.BadRequestException;
 import app.classpool.api.service.ClassroomService;
 import app.classpool.api.service.InviteService;
+import app.classpool.api.service.PoolService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -22,10 +26,13 @@ public class ClassroomController {
 
     private final ClassroomService classroomService;
     private final InviteService inviteService;
+    private final PoolService poolService;
 
-    public ClassroomController(ClassroomService classroomService, InviteService inviteService) {
+    public ClassroomController(ClassroomService classroomService, InviteService inviteService,
+                                PoolService poolService) {
         this.classroomService = classroomService;
         this.inviteService = inviteService;
+        this.poolService = poolService;
     }
 
     @PostMapping
@@ -46,6 +53,18 @@ public class ClassroomController {
                                         @RequestBody(required = false) CreateInviteRequest request) {
         InviteChannel channel = parseChannel(request == null ? null : request.channel());
         return inviteService.create(callerUserId, classroomId, channel);
+    }
+
+    @PostMapping("/{classroomId}/pools")
+    @ResponseStatus(HttpStatus.CREATED)
+    public PoolResponse createPool(@AuthenticationPrincipal UUID callerUserId, @PathVariable UUID classroomId,
+                                    @Valid @RequestBody CreatePoolRequest request) {
+        return poolService.create(callerUserId, classroomId, request);
+    }
+
+    @GetMapping("/{classroomId}/pools")
+    public List<PoolResponse> listPools(@AuthenticationPrincipal UUID callerUserId, @PathVariable UUID classroomId) {
+        return poolService.listForClassroom(callerUserId, classroomId);
     }
 
     private InviteChannel parseChannel(String raw) {

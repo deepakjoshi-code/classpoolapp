@@ -62,11 +62,9 @@ public class InviteService {
     @Transactional
     public InviteResponse create(UUID callerUserId, UUID classroomId, InviteChannel channel) {
         // Organizer/co-organizer only (contract). A plain PARENT membership does not authorize
-        // creating invites.
-        boolean isOrganizer = membershipRepository.findByClassroom_IdAndParentUserId(classroomId, callerUserId)
-                .stream()
-                .anyMatch(m -> m.getRole() == MembershipRole.ORGANIZER || m.getRole() == MembershipRole.CO_ORGANIZER);
-        if (!isOrganizer) {
+        // creating invites. Shared with PoolService/RequirementService — see
+        // MembershipRepository.hasOrganizerRole's Javadoc.
+        if (!membershipRepository.hasOrganizerRole(classroomId, callerUserId)) {
             throw new ForbiddenException("Caller is not an organizer on this classroom");
         }
         // Confirms the classroom exists (404 semantics belong to a get-classroom call; here a

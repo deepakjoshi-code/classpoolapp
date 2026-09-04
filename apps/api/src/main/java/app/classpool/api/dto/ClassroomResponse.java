@@ -1,6 +1,7 @@
 package app.classpool.api.dto;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public record ClassroomResponse(
@@ -11,6 +12,7 @@ public record ClassroomResponse(
         String grade,
         String teacherLabel,
         Integer studentCountEstimate,
-        Instant createdAt
+        Instant createdAt,
+        List<PoolResponse> pools
 ) {
 }

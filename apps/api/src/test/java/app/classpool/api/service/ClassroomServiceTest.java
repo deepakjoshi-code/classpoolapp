@@ -54,11 +54,17 @@ class ClassroomServiceTest {
 
     @BeforeEach
     void setUp() {
-        // ClassroomAssembler is exercised for real (it just needs school/schoolYear lookups),
-        // no need to mock it separately — only its two repository collaborators.
+        // ClassroomAssembler is exercised for real (it just needs school/schoolYear/pool lookups),
+        // no need to mock it separately — only its repository collaborators. The pool repository
+        // mock returns no pools for any classroom, which is fine — these tests don't assert on
+        // Classroom.pools.
+        app.classpool.api.repository.PoolRepository poolRepository =
+                mock(app.classpool.api.repository.PoolRepository.class);
+        lenient().when(poolRepository.findByClassroomIdInOrderByCreatedAtDesc(any())).thenReturn(List.of());
         classroomService = new ClassroomService(classroomRepository, schoolYearRepository, membershipRepository,
                 schoolService, householdService,
-                new ClassroomAssembler(schoolYearRepository, mock(app.classpool.api.repository.SchoolRepository.class)));
+                new ClassroomAssembler(schoolYearRepository, mock(app.classpool.api.repository.SchoolRepository.class),
+                        poolRepository, new PoolAssembler(mock(app.classpool.api.repository.RequirementRepository.class))));
 
         school = new School("Lincoln Elementary");
         setId(school, UUID.randomUUID());

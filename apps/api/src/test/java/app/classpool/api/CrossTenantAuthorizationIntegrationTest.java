@@ -2,6 +2,8 @@ package app.classpool.api;
 
 import app.classpool.api.dto.ClassroomCreatedResponse;
 import app.classpool.api.dto.CreateClassroomRequest;
+import app.classpool.api.dto.CreatePoolRequest;
+import app.classpool.api.dto.PoolResponse;
 import app.classpool.api.support.AbstractIntegrationTest;
 import app.classpool.api.support.TestUsers;
 import org.junit.jupiter.api.Test;
@@ -67,6 +69,33 @@ class CrossTenantAuthorizationIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void aParentInClassA_getsForbidden_readingClassBsPool() {
+        // Same PRD §14 bar, extended to Phase 3: substituting another classroom's poolId must
+        // never leak that classroom's pool, even to a real organizer of a different classroom.
+        TestUsers.AuthedUser organizerA = testUsers.create("poolOrgA@example.com", "Pool Organizer A");
+        TestUsers.AuthedUser organizerB = testUsers.create("poolOrgB@example.com", "Pool Organizer B");
+
+        UUID classroomA = createClassroom(organizerA, "School Pool A " + System.nanoTime(), "Grade 1", "Ms. PA");
+        UUID classroomB = createClassroom(organizerB, "School Pool B " + System.nanoTime(), "Grade 2", "Ms. PB");
+        UUID poolB = createPool(organizerB, classroomB, "Classroom B's Fall Supplies");
+
+        ResponseEntity<String> response = get(organizerA, "/api/v1/pools/" + poolB);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getBody()).doesNotContain("Classroom B's Fall Supplies");
+
+        // The pool's own organizer can read it fine — proves the 403 above is tenant isolation,
+        // not a broken endpoint.
+        ResponseEntity<String> ownerResponse = get(organizerB, "/api/v1/pools/" + poolB);
+        assertThat(ownerResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(ownerResponse.getBody()).contains("Classroom B's Fall Supplies");
+
+        // classroomA is only used to prove organizerA is a genuine member of a different
+        // classroom, not merely unauthenticated — keep the compiler honest about that intent.
+        assertThat(classroomA).isNotEqualTo(classroomB);
+    }
+
+    @Test
     void anUnauthenticatedCaller_getsUnauthorized_notForbiddenOrData() {
         TestUsers.AuthedUser owner = testUsers.create("orgE@example.com", "Owner");
         UUID classroomId = createClassroom(owner, "School E " + System.nanoTime(), "Grade 5", "Ms. E");
@@ -87,6 +116,17 @@ class CrossTenantAuthorizationIntegrationTest extends AbstractIntegrationTest {
                 ClassroomCreatedResponse.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         return response.getBody().classroom().id();
+    }
+
+    private UUID createPool(TestUsers.AuthedUser organizer, UUID classroomId, String name) {
+        CreatePoolRequest request = new CreatePoolRequest(name, null);
+        HttpHeaders headers = new HttpHeaders();
+        headers.add(HttpHeaders.COOKIE, "CLASSPOOL_SESSION=" + organizer.sessionToken());
+        ResponseEntity<PoolResponse> response = rest.exchange(
+                baseUrl() + "/api/v1/classrooms/" + classroomId + "/pools", HttpMethod.POST,
+                new HttpEntity<>(request, headers), PoolResponse.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        return response.getBody().id();
     }
 
     private ResponseEntity<String> get(TestUsers.AuthedUser user, String path) {

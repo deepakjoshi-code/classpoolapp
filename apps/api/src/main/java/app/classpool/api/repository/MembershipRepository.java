@@ -1,9 +1,13 @@
 package app.classpool.api.repository;
 
 import app.classpool.api.domain.Membership;
+import app.classpool.api.domain.MembershipRole;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -27,4 +31,27 @@ public interface MembershipRepository extends JpaRepository<Membership, UUID> {
     List<Membership> findByParentUserIdOrderByCreatedAtAsc(UUID parentUserId);
 
     long countByClassroom_Id(UUID classroomId);
+
+    boolean existsByClassroom_IdAndParentUserIdAndRoleIn(UUID classroomId, UUID parentUserId,
+                                                          Collection<MembershipRole> roles);
+
+    /**
+     * The single "is this caller an organizer/co-organizer on this classroom?" check — extracted
+     * here so every organizer-only endpoint (invite creation, pool creation, requirement
+     * add/edit/remove/confirm) shares one query instead of each service re-deriving its own
+     * ORGANIZER-or-CO_ORGANIZER membership lookup.
+     */
+    default boolean hasOrganizerRole(UUID classroomId, UUID parentUserId) {
+        return existsByClassroom_IdAndParentUserIdAndRoleIn(classroomId, parentUserId,
+                List.of(MembershipRole.ORGANIZER, MembershipRole.CO_ORGANIZER));
+    }
+
+    /**
+     * Distinct students already joined to this classroom (PRD §3.4's "confirmed participating
+     * students") — counts Membership rows with a non-null student_id, since an ORGANIZER-only
+     * grant (student_id null) never represents a participating student.
+     */
+    @Query("select count(distinct m.student.id) from Membership m where m.classroom.id = :classroomId "
+            + "and m.student is not null")
+    long countDistinctStudentsByClassroom_Id(@Param("classroomId") UUID classroomId);
 }

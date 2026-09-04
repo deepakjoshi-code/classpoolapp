@@ -1,8 +1,9 @@
 # ClassPool API
 
-Spring Boot 3 / Java 21 backend implementing `contracts/openapi.yaml`'s Phase 1 (PWA shell + auth)
-and Phase 2 (schools/classes/memberships) surface — see `ARCHITECTURE.md` §4 and `docs/PRD.md`
-§17.3 for the build-order this corresponds to.
+Spring Boot 3 / Java 21 backend implementing `contracts/openapi.yaml`'s Phase 1 (PWA shell + auth),
+Phase 2 (schools/classes/memberships), and Phase 3 (pools + manual requirements, no AI yet)
+surface — see `ARCHITECTURE.md` §4 and `docs/PRD.md` §17.3 for the build-order this corresponds
+to.
 
 ## Running locally
 
@@ -177,18 +178,64 @@ returning anything — see `ClassroomService.getForCaller`. A classroom that exi
 has no membership on returns **403**, never a 404 (which would leak existence) and never partial
 data. `CrossTenantAuthorizationIntegrationTest` is the dedicated proof of this.
 
+## Pools and requirements (Phase 3) design notes
+
+`Pool`/`Requirement` are now full JPA entities (`domain/Pool.java`, `domain/Requirement.java`) —
+`PoolGateway`'s narrow JdbcTemplate query (see "Late-join flag" above) is unchanged and still
+answers its one question via raw SQL, but every Phase 3 endpoint goes through the new
+`PoolRepository`/`RequirementRepository` instead.
+
+**Organizer-only check, extracted once.** `InviteService.create` already had an "is this caller an
+ORGANIZER/CO_ORGANIZER on this classroom?" check; Phase 3 needed the identical check in three more
+places (pool creation, requirement add/edit/remove, pool confirm). Rather than re-deriving it per
+call site, it now lives as `MembershipRepository.hasOrganizerRole(classroomId, callerUserId)` (a
+default method over a derived `existsBy...RoleIn` query), and `InviteService` was refactored onto
+it too — see the method's Javadoc.
+
+**`totalDemand` — a known schema gap, flagged rather than fixed.** PRD §3.4 defines aggregate class
+demand as `quantityPerStudent × confirmedStudentCount`, computed once at pool-confirm time and
+expected to read as a stable snapshot afterward. The V1 migration's `requirement` table, however,
+has **no column** to persist that snapshot (or the `confirmedStudentCount` it was computed from) —
+verified against `infra/db/migrations/V1__initial_schema.sql` directly, not assumed. Per this
+phase's task boundaries, that migration is not this task's to change (a frontend engineer is
+building against the same contract in parallel; an unreviewed schema edit could land underneath
+them), so this was flagged instead of patched with a new migration file.
+
+The workaround actually shipped: `RequirementAssembler` computes `totalDemand` **live** on every
+read — `quantityPerStudent × MembershipRepository.countDistinctStudentsByClassroom_Id(classroomId)`
+— for any Requirement at or past `CONFIRMED`, and returns `null` for `EXTRACTED`/`NEEDS_REVIEW`
+(pre-confirmation, matching the contract). This satisfies every test in this phase's scope,
+including the exact worked example (3 joined students × quantityPerStudent 4 → totalDemand 12),
+but it is a live re-derivation, not a frozen snapshot: if a classroom gains a new Membership after
+its pool leaves DRAFT, `totalDemand` on an already-CONFIRMED requirement would shift on the next
+read, which PRD §3.4's "confirmed" framing does not intend. **Before Phase 4+ relies on
+`totalDemand` for anything financially binding** (residual demand, purchase optimization), this
+needs a real column — either `requirement.total_demand` (and a `pool.confirmed_student_count` to
+match) added via a proper Flyway migration, or the value folded into a Phase 4 entity that already
+owns that lifecycle stage. Filed here rather than worked around by, e.g., repurposing the existing
+`confidence` column (semantically wrong — that column is specifically AI confidence, per its own
+migration comment) or a Redis-backed cache (this codebase's Redis usage is explicitly
+session/rate-limit-shaped per `ARCHITECTURE.md` §1, not a system of record for pool/requirement
+business data — introducing that pattern here would be a bigger deviation than the gap itself).
+
+**`Classroom.pools` summary.** `ClassroomAssembler` now also batches a `PoolResponse` list per
+classroom (via `PoolRepository`/`PoolAssembler`), so every endpoint that serializes a `Classroom` —
+`GET/POST /classrooms/{id}`, `GET /household/dashboard` via `MembershipAssembler` — gets the pools
+summary for free, with no per-endpoint pool-fetching logic to duplicate or drift.
+
 ## Package layout
 
 ```
 app.classpool.api
-├── domain/       JPA entities — one per Phase 1-2 table (AppUser, Household, Student, School,
-│                 SchoolYear, Classroom, Membership, Invite) plus their enums
-├── repository/   Spring Data JPA repositories, including the native pg_trgm dedup queries
-├── service/      Business logic — auth, schools, classrooms, invites, household dashboard,
-│                 the Redis-backed session/magic-link stores, email boundary
+├── domain/       JPA entities — Phase 1-2 (AppUser, Household, Student, School, SchoolYear,
+│                 Classroom, Membership, Invite) and Phase 3 (Pool, Requirement) tables, plus enums
+├── repository/   Spring Data JPA repositories, including the native pg_trgm dedup queries and the
+│                 shared organizer-role / confirmed-student-count queries on MembershipRepository
+├── service/      Business logic — auth, schools, classrooms, invites, household dashboard, pools
+│                 + requirements, the Redis-backed session/magic-link stores, email boundary
 ├── security/     Cookie-based session auth filter + cookie read/write helper
 ├── config/       SecurityConfig (filter chain, public-endpoint allowlist), OAuth2Config
 ├── dto/          Request/response records matching contracts/openapi.yaml's schemas exactly
 ├── web/          @RestController classes, one per resource group in the OpenAPI paths
-└── exception/    ApiException hierarchy (400/401/403/404) + a @RestControllerAdvice
+└── exception/    ApiException hierarchy (400/401/403/404/409) + a @RestControllerAdvice
 ```

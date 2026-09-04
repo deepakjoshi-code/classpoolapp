@@ -4,7 +4,6 @@ import app.classpool.api.domain.Classroom;
 import app.classpool.api.domain.Household;
 import app.classpool.api.domain.Invite;
 import app.classpool.api.domain.Membership;
-import app.classpool.api.domain.MembershipRole;
 import app.classpool.api.domain.Student;
 import app.classpool.api.dto.MembershipResponse;
 import app.classpool.api.exception.ForbiddenException;
@@ -62,10 +61,7 @@ class InviteServiceTest {
 
     @Test
     void create_throwsForbidden_whenCallerIsNotAnOrganizerOnTheClassroom() {
-        Membership plainParent = mock(Membership.class);
-        when(plainParent.getRole()).thenReturn(MembershipRole.PARENT);
-        when(membershipRepository.findByClassroom_IdAndParentUserId(classroomId, callerId))
-                .thenReturn(List.of(plainParent));
+        when(membershipRepository.hasOrganizerRole(classroomId, callerId)).thenReturn(false);
 
         assertThatThrownBy(() -> inviteService.create(callerId, classroomId, null))
                 .isInstanceOf(ForbiddenException.class);
@@ -75,10 +71,7 @@ class InviteServiceTest {
 
     @Test
     void create_succeeds_forAnOrganizer() {
-        Membership organizerMembership = mock(Membership.class);
-        when(organizerMembership.getRole()).thenReturn(MembershipRole.ORGANIZER);
-        when(membershipRepository.findByClassroom_IdAndParentUserId(classroomId, callerId))
-                .thenReturn(List.of(organizerMembership));
+        when(membershipRepository.hasOrganizerRole(classroomId, callerId)).thenReturn(true);
         when(inviteRepository.findByToken(any())).thenReturn(Optional.empty());
         when(inviteRepository.save(any(Invite.class))).thenAnswer(inv -> inv.getArgument(0));
 
