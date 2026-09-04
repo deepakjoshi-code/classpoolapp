@@ -192,31 +192,25 @@ call site, it now lives as `MembershipRepository.hasOrganizerRole(classroomId, c
 default method over a derived `existsBy...RoleIn` query), and `InviteService` was refactored onto
 it too — see the method's Javadoc.
 
-**`totalDemand` — a known schema gap, flagged rather than fixed.** PRD §3.4 defines aggregate class
-demand as `quantityPerStudent × confirmedStudentCount`, computed once at pool-confirm time and
-expected to read as a stable snapshot afterward. The V1 migration's `requirement` table, however,
-has **no column** to persist that snapshot (or the `confirmedStudentCount` it was computed from) —
-verified against `infra/db/migrations/V1__initial_schema.sql` directly, not assumed. Per this
-phase's task boundaries, that migration is not this task's to change (a frontend engineer is
-building against the same contract in parallel; an unreviewed schema edit could land underneath
-them), so this was flagged instead of patched with a new migration file.
+**`totalDemand` — schema gap found and fixed during integration review.** PRD §3.4 defines
+aggregate class demand as `quantityPerStudent × confirmedStudentCount`, computed once at
+pool-confirm time and expected to read as a stable snapshot afterward. The V1 migration's
+`requirement` table had no column to persist that snapshot, so the first cut of this phase computed
+`totalDemand` **live** on every read instead — which passed every test in this phase's scope
+(including the exact worked example, 3 joined students × quantityPerStudent 4 → totalDemand 12),
+but was a real correctness bug waiting to happen: a classroom gaining a Membership after its pool
+left DRAFT (a late joiner, PRD §13.3, is the common case) would have silently changed an
+already-"confirmed" total on the next read — exactly the moving-target-under-a-load-bearing-number
+problem the Phase 6/7 residual-demand engine cannot tolerate.
 
-The workaround actually shipped: `RequirementAssembler` computes `totalDemand` **live** on every
-read — `quantityPerStudent × MembershipRepository.countDistinctStudentsByClassroom_Id(classroomId)`
-— for any Requirement at or past `CONFIRMED`, and returns `null` for `EXTRACTED`/`NEEDS_REVIEW`
-(pre-confirmation, matching the contract). This satisfies every test in this phase's scope,
-including the exact worked example (3 joined students × quantityPerStudent 4 → totalDemand 12),
-but it is a live re-derivation, not a frozen snapshot: if a classroom gains a new Membership after
-its pool leaves DRAFT, `totalDemand` on an already-CONFIRMED requirement would shift on the next
-read, which PRD §3.4's "confirmed" framing does not intend. **Before Phase 4+ relies on
-`totalDemand` for anything financially binding** (residual demand, purchase optimization), this
-needs a real column — either `requirement.total_demand` (and a `pool.confirmed_student_count` to
-match) added via a proper Flyway migration, or the value folded into a Phase 4 entity that already
-owns that lifecycle stage. Filed here rather than worked around by, e.g., repurposing the existing
-`confidence` column (semantically wrong — that column is specifically AI confidence, per its own
-migration comment) or a Redis-backed cache (this codebase's Redis usage is explicitly
-session/rate-limit-shaped per `ARCHITECTURE.md` §1, not a system of record for pool/requirement
-business data — introducing that pattern here would be a bigger deviation than the gap itself).
+Fixed via `infra/db/migrations/V2__pool_confirmed_student_count.sql`: one `integer` column on
+`pool` (not `requirement` — every requirement in a pool is confirmed together against the same
+student count, so one column on the pool suffices rather than duplicating it per requirement).
+`PoolService.confirm()` sets `Pool.confirmedStudentCount` once, before the pool moves to
+`OPEN_FOR_INVENTORY`; `RequirementAssembler` now derives `totalDemand` from that frozen field
+instead of querying `MembershipRepository` at all. `PoolConfirmIntegrationTest`'s
+`totalDemand_doesNotChange_whenAFamilyJoinsAfterConfirm` proves the fix: confirms a pool, joins a
+new family, re-fetches, and asserts the total is unchanged.
 
 **`Classroom.pools` summary.** `ClassroomAssembler` now also batches a `PoolResponse` list per
 classroom (via `PoolRepository`/`PoolAssembler`), so every endpoint that serializes a `Classroom` —

@@ -93,6 +93,10 @@ public class PoolService {
                 .forEach(r -> r.setState(RequirementState.CONFIRMED));
         requirementRepository.saveAll(requirements);
 
+        // Frozen here, once — see Pool.confirmedStudentCount's Javadoc for why this must not be
+        // recomputed live on every later read.
+        long confirmedStudentCount = membershipRepository.countDistinctStudentsByClassroom_Id(pool.getClassroomId());
+        pool.setConfirmedStudentCount((int) confirmedStudentCount);
         pool.setState(PoolState.OPEN_FOR_INVENTORY);
         poolRepository.save(pool);
 
@@ -124,6 +128,6 @@ public class PoolService {
     }
 
     private PoolDetailResponse toDetail(Pool pool, List<Requirement> requirements) {
-        return poolAssembler.toDetail(pool, requirementAssembler.toResponses(requirements, pool.getClassroomId()));
+        return poolAssembler.toDetail(pool, requirementAssembler.toResponses(requirements, pool));
     }
 }

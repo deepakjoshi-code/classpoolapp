@@ -33,6 +33,16 @@ public class Pool {
     @Column(nullable = false)
     private PoolState state;
 
+    /**
+     * Snapshotted once, at {@code confirm()} time — the number of distinct students already
+     * joined to this pool's classroom (PRD §3.4's "confirmed number of participating students").
+     * Null while the pool is still DRAFT. Frozen rather than recomputed live so a family joining
+     * later (e.g. a late joiner, PRD §13.3) never silently changes an already-confirmed
+     * requirement's total demand — see migration V2's comment for the bug this fixes.
+     */
+    @Column(name = "confirmed_student_count")
+    private Integer confirmedStudentCount;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -75,6 +85,14 @@ public class Pool {
 
     public void setState(PoolState state) {
         this.state = state;
+    }
+
+    public Integer getConfirmedStudentCount() {
+        return confirmedStudentCount;
+    }
+
+    public void setConfirmedStudentCount(Integer confirmedStudentCount) {
+        this.confirmedStudentCount = confirmedStudentCount;
     }
 
     public Instant getCreatedAt() {

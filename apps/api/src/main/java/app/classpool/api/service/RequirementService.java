@@ -44,7 +44,7 @@ public class RequirementService {
         Requirement requirement = requirementRepository.save(new Requirement(
                 poolId, request.name(), request.quantityPerStudent(), request.brand(),
                 parseStrictness(request.strictness())));
-        return requirementAssembler.toResponse(requirement, pool.getClassroomId());
+        return requirementAssembler.toResponse(requirement, pool);
     }
 
     /** The "Correct" action (PRD §3.3). */
@@ -59,7 +59,7 @@ public class RequirementService {
         requirement.applyEdit(request.name(), request.quantityPerStudent(), request.brand(),
                 parseStrictness(request.strictness()));
         requirementRepository.save(requirement);
-        return requirementAssembler.toResponse(requirement, pool.getClassroomId());
+        return requirementAssembler.toResponse(requirement, pool);
     }
 
     /** The "Remove" action (PRD §3.3). */

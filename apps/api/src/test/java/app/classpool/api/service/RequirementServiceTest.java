@@ -50,7 +50,7 @@ class RequirementServiceTest {
         // PoolService/RequirementAssembler exercised for real (same pattern as elsewhere in this
         // suite) — only their repository collaborators are mocked.
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
-        RequirementAssembler requirementAssembler = new RequirementAssembler(membershipRepository);
+        RequirementAssembler requirementAssembler = new RequirementAssembler();
         PoolService poolService = new PoolService(poolRepository, requirementRepository, membershipRepository,
                 poolAssembler, requirementAssembler);
         requirementService = new RequirementService(requirementRepository, poolService, requirementAssembler);

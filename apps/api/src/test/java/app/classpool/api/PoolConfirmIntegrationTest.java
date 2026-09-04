@@ -68,6 +68,38 @@ class PoolConfirmIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void totalDemand_doesNotChange_whenAFamilyJoinsAfterConfirm() {
+        // Regression test for a real bug found in integration review: totalDemand was originally
+        // computed live from current Membership rows on every read, which meant a family joining
+        // after confirmation (e.g. a late joiner, PRD §13.3) would silently inflate an
+        // already-"confirmed" requirement's total — exactly the moving target the residual-demand
+        // engine (Phase 6/7) cannot be built against. Migration V2 + Pool.confirmedStudentCount
+        // freeze it at confirm time instead; this proves that holds.
+        TestUsers.AuthedUser organizer = testUsers.create("frozenOrg@example.com", "Frozen Organizer");
+        UUID classroomId = createClassroom(organizer, "Frozen School " + System.nanoTime());
+        UUID poolId = createPool(organizer, classroomId);
+        addRequirement(organizer, poolId, "Pencils", 2);
+
+        joinAsNewParent(organizer, classroomId, "frozenParent1@example.com", "Alex");
+        joinAsNewParent(organizer, classroomId, "frozenParent2@example.com", "Bailey");
+
+        ResponseEntity<PoolDetailResponse> confirmResponse = confirm(organizer, poolId);
+        assertThat(confirmResponse.getBody().requirements())
+                .extracting(RequirementResponse::totalDemand)
+                .containsExactly(4); // 2 students x 2 per student
+
+        // A late joiner arrives after confirmation — must not retroactively change the total above.
+        joinAsNewParent(organizer, classroomId, "frozenParent3@example.com", "Casey");
+
+        ResponseEntity<PoolDetailResponse> afterLateJoin = rest.exchange(
+                baseUrl() + "/api/v1/pools/" + poolId, HttpMethod.GET,
+                new HttpEntity<>(authHeaders(organizer)), PoolDetailResponse.class);
+        assertThat(afterLateJoin.getBody().requirements())
+                .extracting(RequirementResponse::totalDemand)
+                .containsExactly(4); // still 4, not 6 — frozen, not recomputed live
+    }
+
+    @Test
     void confirming_anEmptyPool_returnsConflict() {
         TestUsers.AuthedUser organizer = testUsers.create("emptyPoolOrg@example.com", "Empty Pool Organizer");
         UUID classroomId = createClassroom(organizer, "Empty Pool School " + System.nanoTime());

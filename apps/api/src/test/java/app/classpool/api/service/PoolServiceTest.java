@@ -52,7 +52,7 @@ class PoolServiceTest {
         // ClassroomServiceTest exercising ClassroomAssembler) — only their repository
         // collaborators are mocked.
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
-        RequirementAssembler requirementAssembler = new RequirementAssembler(membershipRepository);
+        RequirementAssembler requirementAssembler = new RequirementAssembler();
         poolService = new PoolService(poolRepository, requirementRepository, membershipRepository, poolAssembler,
                 requirementAssembler);
         lenient().when(requirementRepository.countByPoolIdIn(anyList())).thenReturn(List.of());
