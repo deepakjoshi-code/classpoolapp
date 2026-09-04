@@ -25,7 +25,8 @@ Config is entirely environment-variable driven (see `src/main/resources/applicat
 | `DB_URL`, `DB_USER`, `DB_PASSWORD` | `jdbc:postgresql://localhost:5432/classpool`, `classpool`, `classpool_dev` | Matches `infra/docker-compose.yml` |
 | `REDIS_HOST`, `REDIS_PORT` | `localhost`, `6379` | Session + magic-link token store |
 | `APP_BASE_URL` | `http://localhost:8080` | Used to build the magic-link verify URL and the Google OAuth2 redirect URI |
-| `WEB_BASE_URL` | `http://localhost:3000` | Used to build the `joinUrl` returned from invite creation (points at the Next.js app, a different origin/port in dev) |
+| `WEB_BASE_URL` | `http://localhost:3000` | Used to build the `joinUrl` returned from invite creation and the magic-link email's destination (both point at the Next.js app, a different origin/port in dev) |
+| `CORS_ALLOWED_ORIGINS` | `WEB_BASE_URL`'s value | Comma-separated list of origins allowed to make credentialed cross-origin requests — see "CORS" below |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | unset | Real values needed only to actually complete a Google sign-in — see "Google OAuth2" below; the app starts fine without them |
 | `SESSION_COOKIE_SECURE` | `true` | Set `false` for local HTTP-only dev if your browser rejects a `Secure` cookie over plain `http://localhost` |
 
@@ -87,6 +88,17 @@ form submissions, and the session cookie is `SameSite=Lax`, which already blocks
 cross-site-POST CSRF case. A production hardening pass could still add a double-submit CSRF token
 if the frontend ever grows a cookie-authenticated non-JSON form flow — flagged here rather than
 built now, since nothing in the Phase 1-2 contract needs it.
+
+## CORS
+
+apps/web's API client (`src/lib/api/client.ts`) sends `credentials: "include"` whenever it's
+pointed at an absolute `NEXT_PUBLIC_API_BASE_URL` — its own README calls this out as the setup
+"for local dev where the two apps run on different ports" (this API on `:8080`, the Next.js dev
+server on `:3000` by default). A credentialed cross-origin request needs an explicit
+`Access-Control-Allow-Origin` (never `*`) plus `Access-Control-Allow-Credentials: true`, or the
+browser blocks it before it ever reaches a controller — `SecurityConfig`'s
+`corsConfigurationSource` bean provides that, allowing the origin(s) in `CORS_ALLOWED_ORIGINS`
+(defaults to just `WEB_BASE_URL`).
 
 ## Email delivery
 

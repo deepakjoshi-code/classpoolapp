@@ -1,6 +1,7 @@
 package app.classpool.api.config;
 
 import app.classpool.api.security.SessionAuthenticationFilter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -13,6 +14,11 @@ import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequest
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
 
 /**
  * sessionCookie auth only (see apps/api/README.md "Session mechanism"). CSRF is disabled: this is
@@ -37,10 +43,36 @@ public class SecurityConfig {
             "/api/v1/auth/magic-link/request"
     };
 
+    /**
+     * apps/web's API client uses `credentials: "include"` cross-origin whenever it's pointed at
+     * an absolute NEXT_PUBLIC_API_BASE_URL (its own README: "for local dev where the two apps run
+     * on different ports") — e.g. this API on :8080, the Next.js dev server on :3000. A credentialed
+     * cross-origin request needs an explicit allowed origin (never `*`) plus
+     * Access-Control-Allow-Credentials — without this bean the browser blocks every such request
+     * before it reaches a controller, no matter how the session cookie itself is configured.
+     */
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource(
+            @Value("${classpool.cors.allowed-origins}") String allowedOriginsCsv) {
+        List<String> allowedOrigins = List.of(allowedOriginsCsv.split(",")).stream()
+                .map(String::trim)
+                .filter(origin -> !origin.isEmpty())
+                .toList();
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(allowedOrigins);
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("*"));
+        configuration.setAllowCredentials(true);
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration);
+        return source;
+    }
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http, SessionAuthenticationFilter sessionFilter,
                                             ClientRegistrationRepository clientRegistrationRepository,
-                                            AuthorizationRequestRepository<OAuth2AuthorizationRequest> authorizationRequestRepository)
+                                            AuthorizationRequestRepository<OAuth2AuthorizationRequest> authorizationRequestRepository,
+                                            CorsConfigurationSource corsConfigurationSource)
             throws Exception {
         // Serves GET /oauth2/authorization/google — Spring Security's conventional
         // "start the OAuth2 login" redirect endpoint (redirects the browser to Google's consent
@@ -58,6 +90,7 @@ public class SecurityConfig {
         authorizationRedirectFilter.setAuthorizationRequestRepository(authorizationRequestRepository);
 
         http
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth

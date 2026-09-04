@@ -28,7 +28,7 @@ public class AuthService {
     private final MagicLinkService magicLinkService;
     private final SessionService sessionService;
     private final EmailSender emailSender;
-    private final String magicLinkBaseUrl;
+    private final String webBaseUrl;
 
     public AuthService(AppUserRepository appUserRepository,
                         HouseholdRepository householdRepository,
@@ -37,7 +37,7 @@ public class AuthService {
                         MagicLinkService magicLinkService,
                         SessionService sessionService,
                         EmailSender emailSender,
-                        @Value("${classpool.magic-link.base-url}") String magicLinkBaseUrl) {
+                        @Value("${classpool.web-base-url}") String webBaseUrl) {
         this.appUserRepository = appUserRepository;
         this.householdRepository = householdRepository;
         this.membershipRepository = membershipRepository;
@@ -45,14 +45,20 @@ public class AuthService {
         this.magicLinkService = magicLinkService;
         this.sessionService = sessionService;
         this.emailSender = emailSender;
-        this.magicLinkBaseUrl = magicLinkBaseUrl;
+        this.webBaseUrl = webBaseUrl;
     }
 
-    /** Always succeeds from the caller's point of view — no account enumeration (contract §requestMagicLink). */
+    /**
+     * Always succeeds from the caller's point of view — no account enumeration (contract
+     * §requestMagicLink). The link points at apps/web's own /auth/verify page (which reads
+     * ?token= and calls GET /auth/magic-link/verify client-side, per apps/web's
+     * auth/verify/page.tsx), not straight at this API — clicking it should land the user in the
+     * app, not on a bare JSON response.
+     */
     public void requestMagicLink(String email) {
         String normalized = email.trim().toLowerCase();
         String token = magicLinkService.issue(normalized);
-        String link = magicLinkBaseUrl + "/api/v1/auth/magic-link/verify?token=" + token;
+        String link = webBaseUrl + "/auth/verify?token=" + token;
         emailSender.send(normalized, "Your ClassPool sign-in link",
                 "Tap to sign in (expires in 15 minutes): " + link);
     }
