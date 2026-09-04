@@ -1,10 +1,12 @@
-# ClassPool — Product & Engineering Blueprint (v1.2)
+# ClassPool — Product & Engineering Blueprint (v1.3)
 
 Working specification — Web/PWA first
 Base document: *ClassPool Full Product & Engineering Blueprint* (original blueprint).
 This revision is a PM pass over that original: gaps are called out inline as **`> 🔧 PM UPDATE`** blocks. Everything outside those blocks is the original spec, condensed for the repo. Nothing marked PM UPDATE is optional polish — each one blocks a real V1 flow (money, trust, or data model) if left unresolved.
 
 **v1.2 changes**: resolves physical custody of Class Reserve (previously undefined — see §9.4), plus a second gap pass covering class/school deduplication, substitution-equivalence authoring, self-reported-inventory trust, and organizer physical labor.
+
+**v1.3 changes**: adds a cash/check fallback for families without a card or digital wallet, since Stripe checkout (§8.4) otherwise excludes them entirely with no substitute — see §8.4.
 
 ---
 
@@ -178,6 +180,8 @@ Stripe (US), Razorpay/UPI (India, later). Never store raw card data. States: Pen
 > 🔧 **PM UPDATE — under-collection risk (missing).** Nothing in the original addresses what happens when the purchase plan is ready but not every family has paid by the deadline — extremely common for school fundraisers, and the organizer is a volunteer, not a merchant with working capital. V1 needs a **payment threshold gate**: the "Organizer purchases" action stays visible but shows a risk banner ("$212 of $1,056 still unpaid — 4 families") and requires an explicit organizer acknowledgment to proceed below a configurable threshold (default 90% collected). This doesn't solve the risk, but it stops the app from silently implying the organizer is covered when they aren't.
 
 > 🔧 **PM UPDATE — refund/cancellation triggers (missing).** Payment states already include Refunded/Partially Refunded, but no business rule triggers them. Minimum V1 rule: full refund if the child withdraws from class/school **before** the pool reaches `ORDERED`; no refund after `ORDERED` — instead the paid-for item is redirected into Class Reserve (§9.4) for reallocation or resale credit. This needs to exist before payments ship, not after the first support ticket.
+
+> 🔧 **PM UPDATE — Stripe checkout is card/Apple Pay/Google Pay only, and V1 has no fallback for a family without one.** This is a real exclusion, not an edge case: some families are unbanked, card-averse, or simply prefer handing over cash — and unlike the organizer (who goes through Stripe Express onboarding), parents never create any account, so there's no way to substitute a different digital payment method without rethinking the checkout itself. Recommend a **manual cash/check fallback for V1**, not a second payment integration: a `Payment` can be marked `Pending — Cash` by the organizer, who separately records `Paid — Cash Received` once collected in person. This keeps every household's item on the same allocation/distribution rails (§6, §9) regardless of how they paid — the only difference is Stripe never touches that household's transaction, and the organizer is trusted to log it accurately (same accepted-risk posture as self-reported inventory, §4). It does mean a cash-paying household adds a small manual bookkeeping step for the organizer, which is a fair trade against locking out families with no card.
 
 ---
 
@@ -421,6 +425,7 @@ Moat is the structured fulfillment graph and data from completed pools, not the 
 | 19 | Self-reported inventory has no verification (documented as accepted risk, not a fix) | §4 |
 | 20 | Substitution/equivalence rules for "equivalent_allowed" items have no authoring workflow | §6 |
 | 21 | Physical distribution labor (pack-splitting, per-household counting) undesigned; organizer-burnout risk to viral loop | §9 |
+| 22 | Stripe-only checkout excludes families with no card/digital wallet, with no fallback | §8.4 |
 
 ---
 
