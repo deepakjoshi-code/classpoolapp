@@ -9,6 +9,7 @@ import app.classpool.api.dto.InventorySummaryResponse;
 import app.classpool.api.dto.OfferContributionRequest;
 import app.classpool.api.dto.PoolDetailResponse;
 import app.classpool.api.dto.RequirementResponse;
+import app.classpool.api.dto.SavingsSummaryResponse;
 import app.classpool.api.dto.SetInventoryRequest;
 import app.classpool.api.service.AllocationService;
 import app.classpool.api.service.ContributionService;
@@ -143,5 +144,11 @@ public class PoolController {
     public List<AllocationLineResponse> getMyAllocation(@AuthenticationPrincipal UUID callerUserId,
                                                           @PathVariable UUID poolId) {
         return allocationService.getMyAllocation(callerUserId, poolId);
+    }
+
+    @GetMapping("/{poolId}/savings-summary")
+    public SavingsSummaryResponse getSavingsSummary(@AuthenticationPrincipal UUID callerUserId,
+                                                      @PathVariable UUID poolId) {
+        return allocationService.getSavingsSummary(callerUserId, poolId);
     }
 }

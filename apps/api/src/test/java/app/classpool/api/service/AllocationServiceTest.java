@@ -10,6 +10,9 @@ import app.classpool.api.domain.MembershipRole;
 import app.classpool.api.domain.ParentInventory;
 import app.classpool.api.domain.Pool;
 import app.classpool.api.domain.PoolState;
+import app.classpool.api.domain.ProductOffer;
+import app.classpool.api.domain.PurchasePlan;
+import app.classpool.api.domain.PurchasePlanLine;
 import app.classpool.api.domain.Requirement;
 import app.classpool.api.domain.RequirementState;
 import app.classpool.api.domain.RequirementStrictness;
@@ -17,6 +20,7 @@ import app.classpool.api.domain.ResidualDemandLine;
 import app.classpool.api.domain.Student;
 import app.classpool.api.dto.AllocationLineResponse;
 import app.classpool.api.dto.AllocationSummaryResponse;
+import app.classpool.api.dto.SavingsSummaryResponse;
 import app.classpool.api.exception.ConflictException;
 import app.classpool.api.exception.ForbiddenException;
 import app.classpool.api.repository.AllocationLineRepository;
@@ -24,6 +28,9 @@ import app.classpool.api.repository.ContributionRepository;
 import app.classpool.api.repository.MembershipRepository;
 import app.classpool.api.repository.ParentInventoryRepository;
 import app.classpool.api.repository.PoolRepository;
+import app.classpool.api.repository.ProductOfferRepository;
+import app.classpool.api.repository.PurchasePlanLineRepository;
+import app.classpool.api.repository.PurchasePlanRepository;
 import app.classpool.api.repository.RequirementRepository;
 import app.classpool.api.repository.ResidualDemandLineRepository;
 import app.classpool.api.repository.StudentRepository;
@@ -64,11 +71,19 @@ class AllocationServiceTest {
     @Mock
     private MembershipRepository membershipRepository;
     @Mock
+    private NotificationService notificationService;
+    @Mock
     private ParentInventoryRepository parentInventoryRepository;
     @Mock
     private ContributionRepository contributionRepository;
     @Mock
     private StudentRepository studentRepository;
+    @Mock
+    private PurchasePlanRepository purchasePlanRepository;
+    @Mock
+    private PurchasePlanLineRepository purchasePlanLineRepository;
+    @Mock
+    private ProductOfferRepository productOfferRepository;
     @Mock
     private PoolRepository poolRepository;
 
@@ -82,10 +97,11 @@ class AllocationServiceTest {
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
         RequirementAssembler requirementAssembler = new RequirementAssembler();
         PoolService poolService = new PoolService(poolRepository, requirementRepository, membershipRepository,
-                poolAssembler, requirementAssembler);
+                poolAssembler, requirementAssembler, notificationService);
         allocationService = new AllocationService(allocationLineRepository, residualDemandLineRepository,
                 requirementRepository, membershipRepository, parentInventoryRepository, contributionRepository,
-                studentRepository, poolService);
+                studentRepository, purchasePlanRepository, purchasePlanLineRepository, productOfferRepository,
+                poolService);
     }
 
     // ---- reconcile: per-status outcomes ----
@@ -380,6 +396,124 @@ class AllocationServiceTest {
                 .isInstanceOf(ForbiddenException.class);
     }
 
+    // ---- getSavingsSummary (Phase 12) ----
+
+    @Test
+    void getSavingsSummary_throwsForbidden_whenCallerHasNoMembership() {
+        Pool pool = newPool(PoolState.RECONCILING);
+        when(poolRepository.findById(pool.getId())).thenReturn(Optional.of(pool));
+        when(membershipRepository.existsByClassroom_IdAndParentUserId(classroomId, callerId)).thenReturn(false);
+
+        assertThatThrownBy(() -> allocationService.getSavingsSummary(callerId, pool.getId()))
+                .isInstanceOf(ForbiddenException.class);
+    }
+
+    @Test
+    void getSavingsSummary_throwsConflict_whenPoolHasNotBeenReconciledYet() {
+        Pool pool = newPool(PoolState.OPEN_FOR_INVENTORY);
+        when(poolRepository.findById(pool.getId())).thenReturn(Optional.of(pool));
+        when(membershipRepository.existsByClassroom_IdAndParentUserId(classroomId, callerId)).thenReturn(true);
+
+        assertThatThrownBy(() -> allocationService.getSavingsSummary(callerId, pool.getId()))
+                .isInstanceOf(ConflictException.class);
+    }
+
+    /**
+     * Hand-verified: two requirements' AllocationLines sum to itemsReused = (3+2)+(0+1) = 6,
+     * itemsPurchased = 4+2 = 6. No PurchasePlan yet -&gt; estimatedSavingsCents is 0 and the
+     * shareable message omits the "saved an estimated" clause entirely.
+     */
+    @Test
+    void getSavingsSummary_sumsItemsReusedAndPurchased_zeroSavings_whenNoPurchasePlanYet() {
+        Pool pool = newPool(PoolState.RECONCILING);
+        Requirement glueSticks = newRequirement(pool.getId(), "Glue Sticks", 9);
+        Requirement folders = newRequirement(pool.getId(), "Folders", 3);
+        when(poolRepository.findById(pool.getId())).thenReturn(Optional.of(pool));
+        when(membershipRepository.existsByClassroom_IdAndParentUserId(classroomId, callerId)).thenReturn(true);
+        when(requirementRepository.findByPoolIdOrderByCreatedAtAsc(pool.getId()))
+                .thenReturn(List.of(glueSticks, folders));
+        when(allocationLineRepository.findByRequirementIdInOrderByRequirementIdAscStudentIdAsc(
+                List.of(glueSticks.getId(), folders.getId())))
+                .thenReturn(List.of(
+                        new AllocationLine(glueSticks.getId(), UUID.randomUUID(), 9, 3, 2, 4,
+                                app.classpool.api.domain.AllocationStatus.PURCHASE_REQUIRED),
+                        new AllocationLine(folders.getId(), UUID.randomUUID(), 3, 0, 1, 2,
+                                app.classpool.api.domain.AllocationStatus.PURCHASE_REQUIRED)));
+        when(purchasePlanRepository.findByPoolId(pool.getId())).thenReturn(Optional.empty());
+
+        SavingsSummaryResponse summary = allocationService.getSavingsSummary(callerId, pool.getId());
+
+        assertThat(summary.poolId()).isEqualTo(pool.getId());
+        assertThat(summary.poolName()).isEqualTo("Fall Supplies");
+        assertThat(summary.itemsReused()).isEqualTo(6);
+        assertThat(summary.itemsPurchased()).isEqualTo(6);
+        assertThat(summary.estimatedSavingsCents()).isZero();
+        assertThat(summary.shareableMessage()).isEqualTo("\"Fall Supplies\" reused 6 items with ClassPool!");
+    }
+
+    /**
+     * Same 6 itemsReused as above, now with a PurchasePlan: line 1 costs 300 cents across a
+     * 5-pack x2 (10 units), line 2 costs 200 cents across a 2-pack x1 (2 units) — total spent 500
+     * across 12 units purchased. {@code avgUnitCostCents = round(500/12) = 42} (NOT divided by
+     * itemsPurchased=6), so {@code estimatedSavingsCents = round(42*6) = 252}.
+     */
+    @Test
+    void getSavingsSummary_computesEstimatedSavings_fromAvgActualUnitCost_whenAPurchasePlanExists() {
+        Pool pool = newPool(PoolState.PURCHASE_PROPOSED);
+        Requirement glueSticks = newRequirement(pool.getId(), "Glue Sticks", 9);
+        Requirement folders = newRequirement(pool.getId(), "Folders", 3);
+        when(poolRepository.findById(pool.getId())).thenReturn(Optional.of(pool));
+        when(membershipRepository.existsByClassroom_IdAndParentUserId(classroomId, callerId)).thenReturn(true);
+        when(requirementRepository.findByPoolIdOrderByCreatedAtAsc(pool.getId()))
+                .thenReturn(List.of(glueSticks, folders));
+        when(allocationLineRepository.findByRequirementIdInOrderByRequirementIdAscStudentIdAsc(
+                List.of(glueSticks.getId(), folders.getId())))
+                .thenReturn(List.of(
+                        new AllocationLine(glueSticks.getId(), UUID.randomUUID(), 9, 3, 2, 4,
+                                app.classpool.api.domain.AllocationStatus.PURCHASE_REQUIRED),
+                        new AllocationLine(folders.getId(), UUID.randomUUID(), 3, 0, 1, 2,
+                                app.classpool.api.domain.AllocationStatus.PURCHASE_REQUIRED)));
+
+        PurchasePlan plan = new PurchasePlan(pool.getId());
+        setField(plan, "id", UUID.randomUUID());
+        when(purchasePlanRepository.findByPoolId(pool.getId())).thenReturn(Optional.of(plan));
+
+        ProductOffer offerA = newProductOffer(glueSticks.getId(), 5);
+        ProductOffer offerB = newProductOffer(folders.getId(), 2);
+        PurchasePlanLine lineA = new PurchasePlanLine(plan.getId(), glueSticks.getId(), offerA.getId(), 2, 300, 1);
+        PurchasePlanLine lineB = new PurchasePlanLine(plan.getId(), folders.getId(), offerB.getId(), 1, 200, 0);
+        when(purchasePlanLineRepository.findByPurchasePlanIdOrderByRequirementIdAscProductOfferIdAsc(plan.getId()))
+                .thenReturn(List.of(lineA, lineB));
+        when(productOfferRepository.findAllById(List.of(offerA.getId(), offerB.getId())))
+                .thenReturn(List.of(offerA, offerB));
+
+        SavingsSummaryResponse summary = allocationService.getSavingsSummary(callerId, pool.getId());
+
+        assertThat(summary.itemsReused()).isEqualTo(6);
+        assertThat(summary.estimatedSavingsCents()).isEqualTo(252); // round(round(500/12) * 6) = round(42*6)
+        assertThat(summary.shareableMessage())
+                .isEqualTo("\"Fall Supplies\" reused 6 items and saved an estimated $2.52 with ClassPool!");
+    }
+
+    @Test
+    void getSavingsSummary_shareableMessage_usesSingularWording_forExactlyOneItemReused() {
+        Pool pool = newPool(PoolState.RECONCILING);
+        Requirement glueSticks = newRequirement(pool.getId(), "Glue Sticks", 1);
+        when(poolRepository.findById(pool.getId())).thenReturn(Optional.of(pool));
+        when(membershipRepository.existsByClassroom_IdAndParentUserId(classroomId, callerId)).thenReturn(true);
+        when(requirementRepository.findByPoolIdOrderByCreatedAtAsc(pool.getId())).thenReturn(List.of(glueSticks));
+        when(allocationLineRepository.findByRequirementIdInOrderByRequirementIdAscStudentIdAsc(
+                List.of(glueSticks.getId())))
+                .thenReturn(List.of(new AllocationLine(glueSticks.getId(), UUID.randomUUID(), 1, 1, 0, 0,
+                        app.classpool.api.domain.AllocationStatus.SELF_FULFILLED)));
+        when(purchasePlanRepository.findByPoolId(pool.getId())).thenReturn(Optional.empty());
+
+        SavingsSummaryResponse summary = allocationService.getSavingsSummary(callerId, pool.getId());
+
+        assertThat(summary.itemsReused()).isEqualTo(1);
+        assertThat(summary.shareableMessage()).isEqualTo("\"Fall Supplies\" reused 1 item with ClassPool!");
+    }
+
     // ---- fixtures ----
 
     private void stubOrganizer(Pool pool) {
@@ -426,6 +560,13 @@ class AllocationServiceTest {
         setField(inventory, "id", UUID.randomUUID());
         setField(inventory, "updatedAt", Instant.now());
         return inventory;
+    }
+
+    private static ProductOffer newProductOffer(UUID requirementId, int packQuantity) {
+        ProductOffer offer = new ProductOffer(requirementId, "Amazon", packQuantity, 100, 0, null);
+        setField(offer, "id", UUID.randomUUID());
+        setField(offer, "createdAt", Instant.now());
+        return offer;
     }
 
     private static Contribution newContribution(UUID requirementId, int quantity, ContributionState state) {

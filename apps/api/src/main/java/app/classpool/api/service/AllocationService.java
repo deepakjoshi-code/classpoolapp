@@ -7,6 +7,9 @@ import app.classpool.api.domain.Membership;
 import app.classpool.api.domain.ParentInventory;
 import app.classpool.api.domain.Pool;
 import app.classpool.api.domain.PoolState;
+import app.classpool.api.domain.ProductOffer;
+import app.classpool.api.domain.PurchasePlan;
+import app.classpool.api.domain.PurchasePlanLine;
 import app.classpool.api.domain.Requirement;
 import app.classpool.api.domain.RequirementState;
 import app.classpool.api.domain.ResidualDemandLine;
@@ -14,11 +17,15 @@ import app.classpool.api.domain.Student;
 import app.classpool.api.dto.AllocationLineResponse;
 import app.classpool.api.dto.AllocationSummaryResponse;
 import app.classpool.api.dto.ResidualDemandLineResponse;
+import app.classpool.api.dto.SavingsSummaryResponse;
 import app.classpool.api.exception.ConflictException;
 import app.classpool.api.repository.AllocationLineRepository;
 import app.classpool.api.repository.ContributionRepository;
 import app.classpool.api.repository.MembershipRepository;
 import app.classpool.api.repository.ParentInventoryRepository;
+import app.classpool.api.repository.ProductOfferRepository;
+import app.classpool.api.repository.PurchasePlanLineRepository;
+import app.classpool.api.repository.PurchasePlanRepository;
 import app.classpool.api.repository.RequirementRepository;
 import app.classpool.api.repository.ResidualDemandLineRepository;
 import app.classpool.api.repository.StudentRepository;
@@ -70,6 +77,9 @@ public class AllocationService {
     private final ParentInventoryRepository parentInventoryRepository;
     private final ContributionRepository contributionRepository;
     private final StudentRepository studentRepository;
+    private final PurchasePlanRepository purchasePlanRepository;
+    private final PurchasePlanLineRepository purchasePlanLineRepository;
+    private final ProductOfferRepository productOfferRepository;
     private final PoolService poolService;
 
     public AllocationService(AllocationLineRepository allocationLineRepository,
@@ -77,7 +87,9 @@ public class AllocationService {
                               RequirementRepository requirementRepository, MembershipRepository membershipRepository,
                               ParentInventoryRepository parentInventoryRepository,
                               ContributionRepository contributionRepository, StudentRepository studentRepository,
-                              PoolService poolService) {
+                              PurchasePlanRepository purchasePlanRepository,
+                              PurchasePlanLineRepository purchasePlanLineRepository,
+                              ProductOfferRepository productOfferRepository, PoolService poolService) {
         this.allocationLineRepository = allocationLineRepository;
         this.residualDemandLineRepository = residualDemandLineRepository;
         this.requirementRepository = requirementRepository;
@@ -85,6 +97,9 @@ public class AllocationService {
         this.parentInventoryRepository = parentInventoryRepository;
         this.contributionRepository = contributionRepository;
         this.studentRepository = studentRepository;
+        this.purchasePlanRepository = purchasePlanRepository;
+        this.purchasePlanLineRepository = purchasePlanLineRepository;
+        this.productOfferRepository = productOfferRepository;
         this.poolService = poolService;
     }
 
@@ -234,6 +249,87 @@ public class AllocationService {
 
         return lines.stream().map(line -> toLineResponse(line, requirementsById.get(line.getRequirementId()),
                 studentFirstNames.get(line.getStudentId()))).toList();
+    }
+
+    /**
+     * PRD §16.3's shareable "how much this pool saved" result. Any member of this pool's
+     * classroom may call it (contract) — {@link PoolService#requireMembership}, not {@code
+     * requireOrganizer}, since this is meant to be seen and shared broadly, not restricted to the
+     * organizer. Requires the pool to have been reconciled — same 409 gate as {@link
+     * #getAllocationForOrganizer} (mirrored rather than shared, since this method needs no other
+     * part of that one's organizer-only response assembly).
+     *
+     * <p>{@code itemsReused} sums every {@link AllocationLine}'s {@code ownedQuantity +
+     * poolFulfilledQuantity} (self-owned or community-donated — never bought new);
+     * {@code itemsPurchased} sums {@code purchaseRequiredQuantity}. If a {@link PurchasePlan}
+     * exists, {@code avgUnitCostCents = round(sum(PurchasePlanLine.totalCostCents) /
+     * sum(ProductOffer.packQuantity * PurchasePlanLine.packCount))} — total spent divided by total
+     * units actually purchased across every line, deliberately NOT divided by {@code
+     * itemsPurchased}, since a pack purchase usually buys more than the exact residual need (see
+     * apps/api/README.md's Phase 12 notes for the full write-up of why this is "what we actually
+     * paid per unit," the only real price signal available, and a real approximation rather than
+     * a market price). {@code estimatedSavingsCents = round(avgUnitCostCents * itemsReused)}. No
+     * plan yet -&gt; both are {@code 0} (no price signal to estimate from).
+     */
+    @Transactional(readOnly = true)
+    public SavingsSummaryResponse getSavingsSummary(UUID callerUserId, UUID poolId) {
+        Pool pool = poolService.getEntityOrThrow(poolId);
+        poolService.requireMembership(callerUserId, pool.getClassroomId());
+        requireReconciled(pool);
+
+        List<UUID> requirementIds = requirementRepository.findByPoolIdOrderByCreatedAtAsc(poolId).stream()
+                .map(Requirement::getId).toList();
+
+        int itemsReused = 0;
+        int itemsPurchased = 0;
+        if (!requirementIds.isEmpty()) {
+            List<AllocationLine> lines = allocationLineRepository
+                    .findByRequirementIdInOrderByRequirementIdAscStudentIdAsc(requirementIds);
+            itemsReused = lines.stream().mapToInt(l -> l.getOwnedQuantity() + l.getPoolFulfilledQuantity()).sum();
+            itemsPurchased = lines.stream().mapToInt(AllocationLine::getPurchaseRequiredQuantity).sum();
+        }
+
+        int estimatedSavingsCents = 0;
+        PurchasePlan plan = purchasePlanRepository.findByPoolId(poolId).orElse(null);
+        if (plan != null) {
+            List<PurchasePlanLine> planLines = purchasePlanLineRepository
+                    .findByPurchasePlanIdOrderByRequirementIdAscProductOfferIdAsc(plan.getId());
+            if (!planLines.isEmpty()) {
+                Map<UUID, Integer> packQuantityByOfferId = productOfferRepository
+                        .findAllById(planLines.stream().map(PurchasePlanLine::getProductOfferId).distinct().toList())
+                        .stream()
+                        .collect(Collectors.toMap(ProductOffer::getId, ProductOffer::getPackQuantity));
+
+                long totalSpentCents = planLines.stream().mapToLong(PurchasePlanLine::getTotalCostCents).sum();
+                long totalUnitsPurchased = planLines.stream()
+                        .mapToLong(l -> (long) packQuantityByOfferId.getOrDefault(l.getProductOfferId(), 0)
+                                * l.getPackCount())
+                        .sum();
+                if (totalUnitsPurchased > 0) {
+                    int avgUnitCostCents = (int) Math.round((double) totalSpentCents / totalUnitsPurchased);
+                    estimatedSavingsCents = (int) Math.round(avgUnitCostCents * (double) itemsReused);
+                }
+            }
+        }
+
+        return new SavingsSummaryResponse(pool.getId(), pool.getName(), itemsReused, itemsPurchased,
+                estimatedSavingsCents, shareableMessage(pool.getName(), itemsReused, estimatedSavingsCents));
+    }
+
+    private static String shareableMessage(String poolName, int itemsReused, int estimatedSavingsCents) {
+        String itemWord = itemsReused == 1 ? "item" : "items";
+        StringBuilder message = new StringBuilder()
+                .append('"').append(poolName).append('"')
+                .append(" reused ").append(itemsReused).append(' ').append(itemWord);
+        if (estimatedSavingsCents > 0) {
+            message.append(" and saved an estimated ").append(formatCents(estimatedSavingsCents));
+        }
+        message.append(" with ClassPool!");
+        return message.toString();
+    }
+
+    private static String formatCents(int cents) {
+        return String.format("$%.2f", cents / 100.0);
     }
 
     private void requireReconciled(Pool pool) {
