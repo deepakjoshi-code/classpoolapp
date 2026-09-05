@@ -85,7 +85,7 @@ test("organizer builds a manual supply list, confirms it, and sees correct total
   await expect(organizerPage.getByText("Total needed for the class: 3")).toBeVisible();
   await expect(organizerPage.getByText("Total needed for the class: 2")).toBeVisible();
   await expect(organizerPage.getByRole("heading", { name: "Add an item" })).not.toBeVisible();
-  await expect(organizerPage.getByText(/locked/i)).toBeVisible();
+  await expect(organizerPage.getByText("This list is locked")).toBeVisible();
 
   await organizerContext.close();
   await parentContext.close();
