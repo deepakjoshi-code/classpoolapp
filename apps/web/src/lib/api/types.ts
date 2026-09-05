@@ -142,3 +142,22 @@ export type CreateClassroomRequest = Schemas["CreateClassroomRequest"];
  * EQUIVALENT_ALLOWED server-side).
  */
 export type CreateRequirementRequest = Schemas["CreateRequirementRequest"];
+
+/**
+ * The caller's own event feed (PRD §11.3) — `GET /notifications/mine` /
+ * `POST /notifications/{id}/read`. `message` is already plain language
+ * (never render `type`'s raw enum value to a user — see `NotificationBell`).
+ * Same `DeepRequired` narrowing as every other response type above;
+ * `poolId`/`readAt` keep their `| null` since the contract marks both
+ * `nullable: true` (a class-wide notification has no `poolId`, and an unread
+ * one has no `readAt`).
+ */
+export type Notification = DeepRequired<Schemas["Notification"]>;
+
+/**
+ * The shareable "how much this pool saved" viral-loop artifact (PRD §16.3) —
+ * `GET /pools/{poolId}/savings-summary`. Same `DeepRequired` narrowing as
+ * every other response type above. Requires the pool to have been reconciled
+ * (Phase 6/7) — see `SavingsSummaryCard`'s 409 handling.
+ */
+export type SavingsSummary = DeepRequired<Schemas["SavingsSummary"]>;

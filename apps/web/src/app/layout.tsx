@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
+import { SiteHeader } from "@/components/SiteHeader";
 
 export const metadata: Metadata = {
   title: "ClassPool",
@@ -43,9 +44,10 @@ export default function RootLayout({
           Skip to main content
         </a>
         <ServiceWorkerRegister />
-        <main id="main-content" className="mx-auto min-h-screen max-w-md">
-          {children}
-        </main>
+        <div className="mx-auto min-h-screen max-w-md">
+          <SiteHeader />
+          <main id="main-content">{children}</main>
+        </div>
       </body>
     </html>
   );

@@ -34,6 +34,7 @@ import { GenerateDistributionAction } from "@/components/GenerateDistributionAct
 import { DistributionPanel } from "@/components/DistributionPanel";
 import { ClassReserveCard } from "@/components/ClassReserveCard";
 import { CompletePoolAction } from "@/components/CompletePoolAction";
+import { SavingsSummaryCard } from "@/components/SavingsSummaryCard";
 
 type LoadState =
   | { status: "loading" }
@@ -306,6 +307,7 @@ export default function PoolDetailPage() {
             </>
           )}
           <MyAllocationPanel poolId={pool.id} />
+          <SavingsSummaryCard poolId={pool.id} />
         </div>
       )}
 

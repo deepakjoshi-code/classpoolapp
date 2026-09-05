@@ -17,10 +17,14 @@ Phase 10 (ordering & distribution — organizer records the actual order
 against the approved plan with optional per-line substitution editing,
 organizer sets up and prints per-household pick lists and tracks delivery,
 a household's own "what you're receiving" view, the class reserve ledger,
-and the final "close out this pool" step), and Phase 11 (AI-assisted
+and the final "close out this pool" step), Phase 11 (AI-assisted
 requirement import — organizer pastes a forwarded email/portal text/message
 and gets candidate requirements back with confidence + source evidence,
-alongside the permanent manual-entry path) of the V1 build order — see
+alongside the permanent manual-entry path), and the final phase (a site-wide
+notification bell — PRD §11.3's event list, `NotificationBell` mounted once
+in the new `SiteHeader` — and a shareable savings-summary card on the pool
+detail page — PRD §16.3's viral-loop artifact, `SavingsSummaryCard`, visible
+to any pool member once reconciled) of the V1 build order — see
 `../../ARCHITECTURE.md` §4 and `../../docs/PRD.md` §17.3.
 
 ## Running it
@@ -270,6 +274,22 @@ Component tests live in `src/tests/` (Vitest + React Testing Library), per
   show yet" message; a populated response groups items by student and
   renders each one's plain-language delivered/not-yet-delivered status via
   the same `distributionItemStatusLabel` helper the organizer's panel uses.
+- `NotificationBell.test.tsx` — the site-wide notification bell (PRD §11.3,
+  mounted once in `SiteHeader`): renders nothing (and never calls the
+  endpoint) while signed out; shows the unread count as a badge; opening the
+  dropdown lists every notification's plain-language `message`; clicking an
+  unread one calls `POST /notifications/{id}/read` and navigates to
+  `/pools/{poolId}` when it has one; and clicking one with no `poolId`
+  neither navigates nor re-calls the read endpoint for an already-read row.
+- `SavingsSummaryCard.test.tsx` — the shareable savings-summary card (PRD
+  §16.3's "Grade 1 saved $1,118 and reused 397 items with ClassPool" viral
+  loop): renders the reused/purchased item counts; shows the
+  `estimatedSavingsCents` dollar figure (via `formatCents`) only when it's
+  greater than 0; treats the not-yet-reconciled 409 as a quiet "hasn't been
+  worked out yet" state rather than an error; and the share action calls
+  `navigator.share` when available, falling back to copying
+  `shareableMessage` via `navigator.clipboard.writeText` (with a "Copied!"
+  confirmation) when it isn't.
 
 ## API client — generated from the contract
 
