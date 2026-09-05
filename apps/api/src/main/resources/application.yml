@@ -33,6 +33,9 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      ssl:
+        enabled: ${REDIS_SSL_ENABLED:false}
 
 server:
   port: ${PORT:8080}
@@ -42,6 +45,9 @@ classpool:
     cookie-name: CLASSPOOL_SESSION
     ttl-days: 30
     cookie-secure: ${SESSION_COOKIE_SECURE:true}
+    # "None" for a cross-origin deployment (frontend and API on different domains) — see
+    # SessionCookieHelper's Javadoc. "None" requires cookie-secure=true (the default).
+    cookie-same-site: ${SESSION_COOKIE_SAME_SITE:Lax}
   magic-link:
     ttl-minutes: 15
   app-base-url: ${APP_BASE_URL:http://localhost:8080}
@@ -61,6 +67,13 @@ classpool:
       # hard-fails at startup on a blank client-id even when nothing ever calls /auth/google/callback.
       client-id: ${GOOGLE_CLIENT_ID:unconfigured-google-client-id}
       client-secret: ${GOOGLE_CLIENT_SECRET:unconfigured-google-client-secret}
+  email:
+    # "logging" (default) just logs the email — see LoggingEmailSender. Set to "resend" to send
+    # real email via Resend's HTTP API for manual/staging testing — see ResendEmailSender.
+    provider: ${EMAIL_PROVIDER:logging}
+    from: ${EMAIL_FROM:onboarding@resend.dev}
+    resend:
+      api-key: ${RESEND_API_KEY:}
 
 logging:
   level:
