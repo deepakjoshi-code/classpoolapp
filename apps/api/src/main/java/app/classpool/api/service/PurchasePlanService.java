@@ -282,6 +282,7 @@ public class PurchasePlanService {
     private static PurchasePlanLineResponse toLineResponse(PurchasePlanLine line, Requirement requirement,
                                                              ProductOffer offer) {
         return new PurchasePlanLineResponse(
+                line.getId(),
                 line.getRequirementId(),
                 requirement == null ? null : requirement.getName(),
                 line.getProductOfferId(),
