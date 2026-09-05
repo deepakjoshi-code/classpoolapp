@@ -9,6 +9,11 @@ type Props = {
   poolId: string;
   poolState: Pool["state"];
   onFinalized: (pool: PoolDetail) => void;
+  /** Bump this whenever a payment changes elsewhere on the page (a
+   *  household paying, or the organizer marking cash pending/received/
+   *  refunded in `OrganizerPaymentsPanel`) — this panel's own summary is
+   *  fetched once on mount and has no other way to learn it's stale. */
+  refreshKey?: number;
 };
 
 type LoadState =
@@ -32,7 +37,12 @@ type LoadState =
  * ticked, not just a second click) before `acknowledgeBelowThreshold: true`
  * is sent — this is committing to buy while some families haven't paid.
  */
-export function PaymentsThresholdPanel({ poolId, poolState, onFinalized }: Props) {
+export function PaymentsThresholdPanel({
+  poolId,
+  poolState,
+  onFinalized,
+  refreshKey,
+}: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [confirming, setConfirming] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -41,6 +51,7 @@ export function PaymentsThresholdPanel({ poolId, poolState, onFinalized }: Props
 
   useEffect(() => {
     let cancelled = false;
+    setState({ status: "loading" });
 
     api.GET("/pools/{poolId}/payments/summary", { params: { path: { poolId } } }).then(
       ({ data, error }) => {
@@ -56,7 +67,7 @@ export function PaymentsThresholdPanel({ poolId, poolState, onFinalized }: Props
     return () => {
       cancelled = true;
     };
-  }, [poolId]);
+  }, [poolId, refreshKey]);
 
   async function handleFinalize(acknowledgeBelowThreshold: boolean) {
     setFinalizing(true);

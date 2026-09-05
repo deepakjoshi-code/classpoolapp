@@ -6,6 +6,11 @@ import type { OrganizerStripeAccount } from "@/lib/api/types";
 
 type Props = {
   classroomId: string;
+  /** Called once onboarding reaches ACTIVE (whether that happens via
+   *  `complete` here or was already ACTIVE on load) — lets the pool page
+   *  tell `GeneratePaymentsAction` its "Stripe isn't ACTIVE yet"
+   *  precondition may now be stale. */
+  onActive?: (account: OrganizerStripeAccount) => void;
 };
 
 type LoadState =
@@ -35,7 +40,7 @@ type LoadState =
  * side) — never presented as if a real bank-account connection just
  * happened.
  */
-export function StripeOnboardingCard({ classroomId }: Props) {
+export function StripeOnboardingCard({ classroomId, onActive }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [starting, setStarting] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -107,7 +112,9 @@ export function StripeOnboardingCard({ classroomId }: Props) {
       return;
     }
 
-    setState({ status: "ready", account: data as OrganizerStripeAccount });
+    const activeAccount = data as OrganizerStripeAccount;
+    setState({ status: "ready", account: activeAccount });
+    onActive?.(activeAccount);
   }
 
   if (state.status === "loading") {

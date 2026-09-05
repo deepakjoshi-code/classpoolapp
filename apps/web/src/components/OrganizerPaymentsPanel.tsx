@@ -9,6 +9,11 @@ import { paymentStateLabel } from "@/lib/pool-labels";
 type Props = {
   poolId: string;
   poolState: Pool["state"];
+  /** Called after a cash/refund action changes a payment's state — lets the
+   *  pool page tell `PaymentsThresholdPanel` (a separate, self-contained
+   *  sibling with its own one-time summary fetch) that its collected-total
+   *  may now be stale. */
+  onPaymentChanged?: (payment: Payment) => void;
 };
 
 type LoadState =
@@ -35,7 +40,11 @@ type LoadState =
  * `poolState` rather than re-deriving it, since the payments list itself
  * has no pool-state field of its own.
  */
-export function OrganizerPaymentsPanel({ poolId, poolState }: Props) {
+export function OrganizerPaymentsPanel({
+  poolId,
+  poolState,
+  onPaymentChanged,
+}: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [actingId, setActingId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -92,7 +101,9 @@ export function OrganizerPaymentsPanel({ poolId, poolState }: Props) {
       return;
     }
 
-    replacePayment(data as Payment);
+    const updated = data as Payment;
+    replacePayment(updated);
+    onPaymentChanged?.(updated);
   }
 
   if (state.status === "loading") {

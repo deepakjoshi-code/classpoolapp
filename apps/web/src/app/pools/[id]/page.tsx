@@ -41,6 +41,17 @@ export default function PoolDetailPage() {
   const auth = useCurrentUser();
   const router = useRouter();
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  // Bumped whenever the purchase plan is approved or Stripe onboarding
+  // completes — both happen in separate, self-contained sibling components
+  // with no other link back to GeneratePaymentsAction, whose own
+  // precondition check (fetched once on mount) would otherwise never learn
+  // its "not ready yet" answer is stale.
+  const [paymentPreconditionsRefreshKey, setPaymentPreconditionsRefreshKey] = useState(0);
+  // Bumped whenever a payment changes (a household paying, or the organizer
+  // marking cash pending/received/refunded) so PaymentsThresholdPanel's own
+  // one-time summary fetch — in a separate sibling component — knows to
+  // refetch.
+  const [paymentsRefreshKey, setPaymentsRefreshKey] = useState(0);
 
   useEffect(() => {
     if (auth.status === "anonymous") {
@@ -218,15 +229,26 @@ export default function PoolDetailPage() {
             />
           )}
           {isOrganizer && hasPurchasePlan(pool.state) && (
-            <PurchasePlanPanel poolId={pool.id} />
+            <PurchasePlanPanel
+              poolId={pool.id}
+              onApproved={() =>
+                setPaymentPreconditionsRefreshKey((k) => k + 1)
+              }
+            />
           )}
           {isOrganizer && hasPurchasePlan(pool.state) && (
-            <StripeOnboardingCard classroomId={pool.classroomId} />
+            <StripeOnboardingCard
+              classroomId={pool.classroomId}
+              onActive={() =>
+                setPaymentPreconditionsRefreshKey((k) => k + 1)
+              }
+            />
           )}
           {isOrganizer && pool.state === "PURCHASE_PROPOSED" && (
             <GeneratePaymentsAction
               poolId={pool.id}
               classroomId={pool.classroomId}
+              refreshKey={paymentPreconditionsRefreshKey}
               onGenerated={() =>
                 updatePool((prev) => ({ ...prev, state: "PAYMENT_OPEN" }))
               }
@@ -237,11 +259,16 @@ export default function PoolDetailPage() {
               <PaymentsThresholdPanel
                 poolId={pool.id}
                 poolState={pool.state}
+                refreshKey={paymentsRefreshKey}
                 onFinalized={(finalized) =>
                   setState({ status: "ready", pool: finalized })
                 }
               />
-              <OrganizerPaymentsPanel poolId={pool.id} poolState={pool.state} />
+              <OrganizerPaymentsPanel
+                poolId={pool.id}
+                poolState={pool.state}
+                onPaymentChanged={() => setPaymentsRefreshKey((k) => k + 1)}
+              />
             </>
           )}
           <MyAllocationPanel poolId={pool.id} />

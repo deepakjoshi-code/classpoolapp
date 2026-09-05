@@ -8,6 +8,17 @@ type Props = {
   poolId: string;
   classroomId: string;
   onGenerated: (payments: Payment[]) => void;
+  /**
+   * Bump this (e.g. a counter incremented by the parent page) whenever
+   * something that could change the precondition check's answer happens
+   * elsewhere on the page — approving the purchase plan in
+   * `PurchasePlanPanel`, or completing Stripe onboarding in
+   * `StripeOnboardingCard`. Both are separate, self-contained components
+   * with no other link back to this one, so without this the precondition
+   * check (which only runs once on mount) would never learn that its
+   * "blocked" answer is stale.
+   */
+  refreshKey?: number;
 };
 
 type PreconditionState =
@@ -35,7 +46,12 @@ type PreconditionState =
  * app, since the pool detail page stops mounting this once
  * `hasPayments(pool.state)`.
  */
-export function GeneratePaymentsAction({ poolId, classroomId, onGenerated }: Props) {
+export function GeneratePaymentsAction({
+  poolId,
+  classroomId,
+  onGenerated,
+  refreshKey,
+}: Props) {
   const [precondition, setPrecondition] = useState<PreconditionState>({
     status: "checking",
   });
@@ -45,6 +61,7 @@ export function GeneratePaymentsAction({ poolId, classroomId, onGenerated }: Pro
 
   useEffect(() => {
     let cancelled = false;
+    setPrecondition({ status: "checking" });
 
     Promise.all([
       api.GET("/pools/{poolId}/purchase-plan", { params: { path: { poolId } } }),
@@ -86,7 +103,7 @@ export function GeneratePaymentsAction({ poolId, classroomId, onGenerated }: Pro
     return () => {
       cancelled = true;
     };
-  }, [poolId, classroomId]);
+  }, [poolId, classroomId, refreshKey]);
 
   async function handleRun() {
     setSubmitting(true);

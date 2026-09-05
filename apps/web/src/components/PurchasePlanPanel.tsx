@@ -8,6 +8,11 @@ import { purchasePlanStateLabel } from "@/lib/pool-labels";
 
 type Props = {
   poolId: string;
+  /** Called after a successful approve — lets the pool page tell
+   *  `GeneratePaymentsAction` (a separate, self-contained component with no
+   *  other link back to this one) that its "plan needs to be approved
+   *  first" precondition may now be stale. */
+  onApproved?: (plan: PurchasePlan) => void;
 };
 
 type LoadState =
@@ -36,7 +41,7 @@ type LoadState =
  * On success, the returned (now-`APPROVED`) plan replaces local state
  * directly — no full reload.
  */
-export function PurchasePlanPanel({ poolId }: Props) {
+export function PurchasePlanPanel({ poolId, onApproved }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [confirmingApproval, setConfirmingApproval] = useState(false);
   const [approving, setApproving] = useState(false);
@@ -84,7 +89,9 @@ export function PurchasePlanPanel({ poolId }: Props) {
     }
 
     setConfirmingApproval(false);
-    setState({ status: "ready", plan: data as PurchasePlan });
+    const approvedPlan = data as PurchasePlan;
+    setState({ status: "ready", plan: approvedPlan });
+    onApproved?.(approvedPlan);
   }
 
   if (state.status === "loading") {
