@@ -787,6 +787,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pools/{poolId}/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The recorded order, organizer-only. 409 if none recorded yet. */
+        get: operations["getOrder"];
+        put?: never;
+        /** Organizer records that the approved purchase plan was actually bought (PRD §9.1). One `OrderLine` per `PurchasePlanLine`; `actualCostCents`/`actualDescription` default to the plan's own figures unless overridden (a substitution — a different pack/ brand than priced). Per line, if the resulting delta exceeds 10% of that line's planned cost, it's `TOP_UP_CHARGED` — an additional `Payment` (state `PENDING`) is created per household that owed a share of that requirement, split the same need-based-proportional way Phase 9's `generatePayments` does, letting the existing payment-collection surface handle it with no new UI; a delta at or under 10% is `ABSORBED` (recorded, but nobody is billed again). Requires the pool to be `ORDERED` — 409 if an order has already been recorded for this pool. */
+        post: operations["recordOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/distribution/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer generates the distribution batch (PRD §9.2/§9.3): one `DistributionItem` per (requirement, student) line from the Phase 6/7 allocation snapshot with a nonzero `poolFulfilledQuantity + purchaseRequiredQuantity` — self- fulfilled items need no physical handoff, so those lines are skipped. Any `PurchasePlanLine.wasteQuantity` becomes a `ClassReserveEntry` for this classroom (PRD §9.4 — physically kept in the classroom, not the organizer's home). Requires an `Order` already recorded and the pool to be `ORDERED`. One-way: moves the pool `ORDERED → DISTRIBUTING`; 409 if a batch already exists for this pool. */
+        post: operations["generateDistribution"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/distribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The generated batch, organizer-only — includes both the raw per-student items (for marking delivered) and a per-household pick list (PRD §9.2 update's printable "Family A: 12 pencils, 2 notebooks…" artifact, summed across siblings in the same household). 409 if generate hasn't run yet. */
+        get: operations["getDistribution"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/distribution/mine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's own household's distribution items only — what they're receiving, for their own students. Empty array if distribution hasn't been generated yet, or their household has nothing to receive. */
+        get: operations["getMyDistribution"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/distribution/items/{itemId}/deliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer marks one line physically handed over. 409 if already delivered. */
+        post: operations["markDistributionItemDelivered"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/class-reserve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every `ClassReserveEntry` currently banked for this pool's classroom (PRD §9.4/§19 — later pools check this before sizing a new purchase), organizer-only. */
+        get: operations["getClassReserve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer marks the pool finished (PRD's V1 flow: "pool completed → savings shown"). Requires the pool to be `DISTRIBUTING` — V1 doesn't require every `DistributionItem` to already be marked delivered first (an accepted organizer-trust simplification, same posture as self-reported inventory, §4). One-way: moves `DISTRIBUTING → COMPLETED`. */
+        post: operations["completePool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/household/dashboard": {
         parameters: {
             query?: never;
@@ -1112,6 +1232,84 @@ export interface components {
             thresholdPercent?: number;
             meetsThreshold?: boolean;
             outstandingHouseholds?: components["schemas"]["OutstandingHousehold"][];
+        };
+        OrderLine: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            purchasePlanLineId?: string;
+            /** Format: uuid */
+            requirementId?: string;
+            requirementName?: string;
+            plannedCostCents?: number;
+            actualCostCents?: number;
+            actualDescription?: string | null;
+            /** @description actualCostCents - plannedCostCents. Null when they're equal (no substitution recorded). */
+            substitutionDeltaCents?: number | null;
+            /**
+             * @description Set only when a delta was recorded. ABSORBED if |delta| is <= 10% of plannedCostCents (no re-billing); TOP_UP_CHARGED otherwise, in which case an additional Payment was created per affected household (PRD sec9.1 update).
+             * @enum {string|null}
+             */
+            substitutionResolution?: "ABSORBED" | "TOP_UP_CHARGED" | null;
+        };
+        Order: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            poolId?: string;
+            /** Format: uuid */
+            orderedBy?: string;
+            /** Format: date-time */
+            orderedAt?: string;
+            receiptS3Key?: string | null;
+            lines?: components["schemas"]["OrderLine"][];
+        };
+        DistributionItem: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            studentId?: string;
+            studentFirstName?: string | null;
+            /** Format: uuid */
+            requirementId?: string;
+            requirementName?: string;
+            quantity?: number;
+            /** Format: date-time */
+            deliveredAt?: string | null;
+        };
+        HouseholdPickListLine: {
+            requirementName?: string;
+            quantity?: number;
+        };
+        HouseholdPickList: {
+            /** Format: uuid */
+            householdId?: string;
+            householdDisplayName?: string | null;
+            lines?: components["schemas"]["HouseholdPickListLine"][];
+        };
+        DistributionSummary: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            poolId?: string;
+            /** @enum {string} */
+            mode?: "CLASSROOM_DESK" | "LOBBY_PICKUP" | "HOUSEHOLD_BAG";
+            /** Format: date-time */
+            createdAt?: string;
+            items?: components["schemas"]["DistributionItem"][];
+            /** @description The same items, summed per requirement and grouped by household — the printable artifact (PRD sec9.2 update). */
+            pickLists?: components["schemas"]["HouseholdPickList"][];
+        };
+        ClassReserveEntry: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            classroomId?: string;
+            itemName?: string;
+            quantity?: number;
+            custodianLocation?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
         };
     };
     responses: never;
@@ -2740,6 +2938,300 @@ export interface operations {
                 content?: never;
             };
             /** @description Below the 90% threshold and not acknowledged, or the pool isn't PAYMENT_OPEN */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No order has been recorded for this pool yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    recordOrder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    receiptS3Key?: string | null;
+                    lines?: {
+                        /** Format: uuid */
+                        purchasePlanLineId: string;
+                        actualCostCents?: number | null;
+                        actualDescription?: string | null;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool is not ORDERED, or an order already exists for this pool */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    generateDistribution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    mode: "CLASSROOM_DESK" | "LOBBY_PICKUP" | "HOUSEHOLD_BAG";
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DistributionSummary"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No order recorded yet, pool isn't ORDERED, or a batch already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getDistribution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DistributionSummary"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No distribution has been generated for this pool yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getMyDistribution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DistributionItem"][];
+                };
+            };
+            /** @description Caller has no Membership on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    markDistributionItemDelivered: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DistributionItem"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Item is already marked delivered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getClassReserve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClassReserveEntry"][];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    completePool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolDetail"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool is not DISTRIBUTING */
             409: {
                 headers: {
                     [name: string]: unknown;

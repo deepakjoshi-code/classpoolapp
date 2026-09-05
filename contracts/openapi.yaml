@@ -1046,6 +1046,197 @@ paths:
         "403": { description: Caller is not an organizer on this pool's classroom }
         "409": { description: "Below the 90% threshold and not acknowledged, or the pool isn't PAYMENT_OPEN" }
 
+  /pools/{poolId}/order:
+    post:
+      operationId: recordOrder
+      summary: >
+        Organizer records that the approved purchase plan was actually
+        bought (PRD §9.1). One `OrderLine` per `PurchasePlanLine`;
+        `actualCostCents`/`actualDescription` default to the plan's own
+        figures unless overridden (a substitution — a different pack/
+        brand than priced). Per line, if the resulting delta exceeds 10%
+        of that line's planned cost, it's `TOP_UP_CHARGED` — an
+        additional `Payment` (state `PENDING`) is created per household
+        that owed a share of that requirement, split the same
+        need-based-proportional way Phase 9's `generatePayments` does,
+        letting the existing payment-collection surface handle it with
+        no new UI; a delta at or under 10% is `ABSORBED` (recorded, but
+        nobody is billed again). Requires the pool to be `ORDERED` —
+        409 if an order has already been recorded for this pool.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                receiptS3Key: { type: string, nullable: true }
+                lines:
+                  type: array
+                  items:
+                    type: object
+                    required: [purchasePlanLineId]
+                    properties:
+                      purchasePlanLineId: { type: string, format: uuid }
+                      actualCostCents: { type: integer, nullable: true }
+                      actualDescription: { type: string, nullable: true }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "Pool is not ORDERED, or an order already exists for this pool" }
+    get:
+      operationId: getOrder
+      summary: The recorded order, organizer-only. 409 if none recorded yet.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: No order has been recorded for this pool yet }
+
+  /pools/{poolId}/distribution/generate:
+    post:
+      operationId: generateDistribution
+      summary: >
+        Organizer generates the distribution batch (PRD §9.2/§9.3): one
+        `DistributionItem` per (requirement, student) line from the
+        Phase 6/7 allocation snapshot with a nonzero
+        `poolFulfilledQuantity + purchaseRequiredQuantity` — self-
+        fulfilled items need no physical handoff, so those lines are
+        skipped. Any `PurchasePlanLine.wasteQuantity` becomes a
+        `ClassReserveEntry` for this classroom (PRD §9.4 — physically
+        kept in the classroom, not the organizer's home). Requires an
+        `Order` already recorded and the pool to be `ORDERED`. One-way:
+        moves the pool `ORDERED → DISTRIBUTING`; 409 if a batch already
+        exists for this pool.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [CLASSROOM_DESK, LOBBY_PICKUP, HOUSEHOLD_BAG] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DistributionSummary" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "No order recorded yet, pool isn't ORDERED, or a batch already exists" }
+
+  /pools/{poolId}/distribution:
+    get:
+      operationId: getDistribution
+      summary: >
+        The generated batch, organizer-only — includes both the raw
+        per-student items (for marking delivered) and a per-household
+        pick list (PRD §9.2 update's printable "Family A: 12 pencils, 2
+        notebooks…" artifact, summed across siblings in the same
+        household). 409 if generate hasn't run yet.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DistributionSummary" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: No distribution has been generated for this pool yet }
+
+  /pools/{poolId}/distribution/mine:
+    get:
+      operationId: getMyDistribution
+      summary: >
+        The caller's own household's distribution items only — what
+        they're receiving, for their own students. Empty array if
+        distribution hasn't been generated yet, or their household has
+        nothing to receive.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DistributionItem" }
+        "403": { description: Caller has no Membership on this pool's classroom }
+
+  /pools/{poolId}/distribution/items/{itemId}/deliver:
+    post:
+      operationId: markDistributionItemDelivered
+      summary: Organizer marks one line physically handed over. 409 if already delivered.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DistributionItem" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: Item is already marked delivered }
+
+  /pools/{poolId}/class-reserve:
+    get:
+      operationId: getClassReserve
+      summary: >
+        Every `ClassReserveEntry` currently banked for this pool's
+        classroom (PRD §9.4/§19 — later pools check this before sizing a
+        new purchase), organizer-only.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ClassReserveEntry" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+
+  /pools/{poolId}/complete:
+    post:
+      operationId: completePool
+      summary: >
+        Organizer marks the pool finished (PRD's V1 flow: "pool
+        completed → savings shown"). Requires the pool to be
+        `DISTRIBUTING` — V1 doesn't require every `DistributionItem` to
+        already be marked delivered first (an accepted organizer-trust
+        simplification, same posture as self-reported inventory, §4).
+        One-way: moves `DISTRIBUTING → COMPLETED`.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PoolDetail" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: Pool is not DISTRIBUTING }
+
   /household/dashboard:
     get:
       operationId: getHouseholdDashboard
@@ -1435,3 +1626,90 @@ components:
         outstandingHouseholds:
           type: array
           items: { $ref: "#/components/schemas/OutstandingHousehold" }
+
+    OrderLine:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        purchasePlanLineId: { type: string, format: uuid }
+        requirementId: { type: string, format: uuid }
+        requirementName: { type: string }
+        plannedCostCents: { type: integer }
+        actualCostCents: { type: integer }
+        actualDescription: { type: string, nullable: true }
+        substitutionDeltaCents:
+          type: integer
+          nullable: true
+          description: actualCostCents - plannedCostCents. Null when they're equal (no substitution recorded).
+        substitutionResolution:
+          type: string
+          nullable: true
+          enum: [ABSORBED, TOP_UP_CHARGED]
+          description: >
+            Set only when a delta was recorded. ABSORBED if |delta| is
+            <= 10% of plannedCostCents (no re-billing); TOP_UP_CHARGED
+            otherwise, in which case an additional Payment was created
+            per affected household (PRD sec9.1 update).
+
+    Order:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        poolId: { type: string, format: uuid }
+        orderedBy: { type: string, format: uuid }
+        orderedAt: { type: string, format: date-time }
+        receiptS3Key: { type: string, nullable: true }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/OrderLine" }
+
+    DistributionItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        studentId: { type: string, format: uuid }
+        studentFirstName: { type: string, nullable: true }
+        requirementId: { type: string, format: uuid }
+        requirementName: { type: string }
+        quantity: { type: integer }
+        deliveredAt: { type: string, format: date-time, nullable: true }
+
+    HouseholdPickListLine:
+      type: object
+      properties:
+        requirementName: { type: string }
+        quantity: { type: integer }
+
+    HouseholdPickList:
+      type: object
+      properties:
+        householdId: { type: string, format: uuid }
+        householdDisplayName: { type: string, nullable: true }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/HouseholdPickListLine" }
+
+    DistributionSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        poolId: { type: string, format: uuid }
+        mode: { type: string, enum: [CLASSROOM_DESK, LOBBY_PICKUP, HOUSEHOLD_BAG] }
+        createdAt: { type: string, format: date-time }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DistributionItem" }
+        pickLists:
+          type: array
+          items: { $ref: "#/components/schemas/HouseholdPickList" }
+          description: The same items, summed per requirement and grouped by household — the printable artifact (PRD sec9.2 update).
+
+    ClassReserveEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        classroomId: { type: string, format: uuid }
+        itemName: { type: string }
+        quantity: { type: integer }
+        custodianLocation: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
