@@ -797,8 +797,15 @@ components:
         id: { type: string, format: uuid }
         requirementId: { type: string, format: uuid }
         requirementName: { type: string }
-        studentId: { type: string, format: uuid }
-        studentFirstName: { type: string }
+        studentId:
+          type: string
+          format: uuid
+          nullable: true
+          description: "Always null in V1 — contributions aren't tracked per-student in the domain model (no student_id column on contribution)."
+        studentFirstName:
+          type: string
+          nullable: true
+          description: "Always null in V1 — see studentId."
         offeringParentDisplayName:
           type: string
           description: Only ever present to the organizer's own listing endpoint (PRD §5.3 privacy model) — omitted from the offering parent's own "mine" view, where it would be redundant, and never exposed to other parents.

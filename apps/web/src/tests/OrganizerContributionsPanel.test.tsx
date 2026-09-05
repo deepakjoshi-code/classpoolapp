@@ -30,12 +30,14 @@ vi.mock("@/lib/use-current-user", () => ({
 const mockedApi = vi.mocked(api);
 const mockedUseCurrentUser = vi.mocked(useCurrentUser);
 
+// studentId/studentFirstName are always null in V1 (see openapi.yaml's
+// Contribution schema) — contributions aren't tracked per-student.
 const pledged: Contribution = {
   id: "contrib-1",
   requirementId: "req-1",
   requirementName: "Glue Stick",
-  studentId: "student-1",
-  studentFirstName: "Ava",
+  studentId: null,
+  studentFirstName: null,
   offeringParentDisplayName: "Priya Patel",
   quantity: 3,
   mode: "DONATE",
@@ -47,8 +49,8 @@ const received: Contribution = {
   id: "contrib-2",
   requirementId: "req-1",
   requirementName: "Glue Stick",
-  studentId: "student-2",
-  studentFirstName: "Ben",
+  studentId: null,
+  studentFirstName: null,
   offeringParentDisplayName: "Marcus Lee",
   quantity: 1,
   mode: "DONATE",

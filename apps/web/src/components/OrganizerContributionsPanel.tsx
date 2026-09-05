@@ -145,10 +145,6 @@ export function OrganizerContributionsPanel({ poolId }: Props) {
                 <div>
                   <p className="font-medium text-slate-900">
                     {contribution.quantity} × {contribution.requirementName}
-                    <span className="font-normal text-slate-500">
-                      {" "}
-                      · {contribution.studentFirstName}
-                    </span>
                   </p>
                   <p className="mt-0.5 text-slate-600">
                     From {contribution.offeringParentDisplayName ?? "an unnamed household"}{" "}

@@ -621,9 +621,13 @@ export interface components {
             /** Format: uuid */
             requirementId?: string;
             requirementName?: string;
-            /** Format: uuid */
-            studentId?: string;
-            studentFirstName?: string;
+            /**
+             * Format: uuid
+             * @description Always null in V1 — contributions aren't tracked per-student in the domain model (no student_id column on contribution).
+             */
+            studentId?: string | null;
+            /** @description Always null in V1 — see studentId. */
+            studentFirstName?: string | null;
             /** @description Only ever present to the organizer's own listing endpoint (PRD §5.3 privacy model) — omitted from the offering parent's own "mine" view, where it would be redundant, and never exposed to other parents. */
             offeringParentDisplayName?: string | null;
             quantity?: number;
