@@ -3,8 +3,10 @@
 Next.js 15 (App Router) + TypeScript PWA for ClassPool's parent/organizer-facing
 frontend. Covers Phase 1 (PWA shell + auth), Phase 2 (schools/classes/
 memberships), Phase 3 (pools + manual requirement ingestion/verification),
-and Phase 4 (household inventory — "Shop Your Home First") of the V1 build
-order — see `../../ARCHITECTURE.md` §4 and `../../docs/PRD.md` §17.3.
+Phase 4 (household inventory — "Shop Your Home First"), and Phase 5
+(contribution pool — offer/withdraw surplus, organizer receive confirmation)
+of the V1 build order — see `../../ARCHITECTURE.md` §4 and
+`../../docs/PRD.md` §17.3.
 
 ## Running it
 
@@ -75,6 +77,32 @@ Component tests live in `src/tests/` (Vitest + React Testing Library), per
 - `InventorySummaryPanel.test.tsx` — the organizer aggregate view: fetches
   `GET /pools/{id}/inventory/summary` and renders the "completed X/Y
   students" line plus each requirement's already-owned total.
+- `ContributionOfferCard.test.tsx` — the "Offer surplus" pledge card (PRD
+  §5.1): renders the requirement/quantity context and an offer form, submits
+  `POST .../contributions` with the exact `{ studentId, quantity, mode:
+  "DONATE" }` payload, disables submit until a valid quantity is entered,
+  shows this household's own pledge(s) with `PLEDGED`/`RECEIVED` status text
+  worded to read unambiguously different (not just a color swap — WCAG 2.1
+  AA 1.4.1), asserts a withdraw button appears only for a still-`PLEDGED`
+  pledge (never for `RECEIVED`) and that clicking it calls `DELETE
+  .../contributions/{id}`, surfaces the 409 "already received" message, and
+  — the privacy check — asserts the card never renders "From ..." or any
+  household-identifying text even when `offeringParentDisplayName` is present
+  on the object it's handed (it's the wrong component to ever show that).
+- `OrganizerContributionsPanel.test.tsx` — the organizer confirmation view
+  (PRD §12.3 "View unreceived contributions"): fetches `GET
+  /pools/{id}/contributions` and renders each offering household's name,
+  shows "Mark received" only on `PLEDGED` rows and calls `POST
+  .../{id}/receive` correctly, and a fallback message on a 403. Also
+  contains an explicit **visibility** test suite that renders the real
+  `PoolDetailPage` end-to-end (mocking `next/navigation` and
+  `useCurrentUser`) once as a plain parent and once as an organizer on the
+  same pool: for the parent, it asserts the panel's heading, any contributor
+  name, and the "Mark received" button are all absent from the DOM, *and*
+  that `GET /pools/{id}/contributions` — the identity-carrying endpoint
+  itself — is never called; for the organizer, it asserts the same panel and
+  data ARE rendered, so the parent-side assertion is proven to be a real
+  role gate and not just an always-off component.
 
 ## API client — generated from the contract
 
@@ -145,6 +173,7 @@ local inventory edits" — not yet built, out of scope for Phase 1-2).
 | `/classrooms/[id]/pools/new` | Organizer/co-organizer only: name a pool ("Fall Supplies") and start it in `DRAFT` |
 | `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4) |
 | `/pools/[id]/inventory` | "Shop Your Home First" (PRD §4) — the caller's own household inventory checklist: one +/- stepper row per (requirement, student) they have in this classroom (Phase 4) |
+| `/pools/[id]/contribute` | "Offer surplus" (PRD §5.1) — the caller's own pledge screen: one offer card per (requirement, student) they have in this classroom, showing their own pledge status and a withdraw action while still `PLEDGED`. Linked from `/pools/[id]` once the pool is past `DRAFT`, alongside (but visually secondary to, per the "optional/low-pressure" framing) the inventory link (Phase 5). The organizer's confirmation view is not a page — it's `OrganizerContributionsPanel`, embedded directly on `/pools/[id]` next to the inventory summary, same as Phase 4 |
 
 ## Known discrepancies / assumptions against the contract
 
@@ -230,3 +259,34 @@ Flagged here rather than editing `contracts/openapi.yaml` unilaterally:
    UX nicety, not a security boundary — the API's 403s are the real
    enforcement, same pattern as the rest of this app (PRD §14's tenant
    isolation is a backend concern).
+10. **"Offer surplus" derives the caller's own (requirement × student) pairs
+    from `GET /me`'s `memberships`, not from a contribution-specific listing
+    endpoint (Phase 5).** Unlike inventory, where `GET /pools/{id}/inventory`
+    hands back one row per (requirement, student) the caller already has
+    standing to act on, there's no equivalent "here's what you're allowed to
+    offer against" endpoint for contributions — `POST .../contributions`
+    only takes a `studentId` in its body and 403s if the caller has no
+    Membership on that student for this classroom. So `/pools/[id]/contribute`
+    builds the student list itself, filtering `auth.user.memberships` (from
+    the already-fetched `GET /me`) down to this pool's `classroomId`, then
+    crosses that with every requirement — same per-student authorization
+    boundary the contract describes, just assembled client-side from data we
+    already had rather than a new round trip. Worth a follow-up contract
+    conversation if a future phase wants a single endpoint that returns this
+    directly (mirroring `InventoryLine`).
+11. **Privacy (PRD §5.3) is enforced by which component/endpoint a screen
+    uses, not by a field-level redaction step (Phase 5).** There are two
+    completely separate read paths for contributions — a parent's own
+    (`GET .../contributions/mine`, rendered only by `ContributionOfferCard`,
+    which never reads or renders `offeringParentDisplayName`) and the
+    organizer's (`GET .../contributions`, rendered only by
+    `OrganizerContributionsPanel`, embedded on `/pools/[id]` exclusively
+    inside the same `isOrganizer` branch that already gates
+    `InventorySummaryPanel`). No component tries to be both views with a
+    prop toggling whether names show — that would leave one bug away from a
+    parent seeing another household's name. `OrganizerContributionsPanel.
+    test.tsx` includes an explicit end-to-end check of this: it renders the
+    real `PoolDetailPage` as a plain parent and asserts the identity-carrying
+    endpoint is never even called, then re-renders it as an organizer on the
+    same pool and asserts the panel does appear — proving the gate is a real
+    role check, not a component that just never renders.

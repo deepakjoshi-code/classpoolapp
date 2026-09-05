@@ -11,6 +11,7 @@ import { RequirementForm } from "@/components/RequirementForm";
 import { RequirementListItem } from "@/components/RequirementListItem";
 import { ConfirmPoolAction } from "@/components/ConfirmPoolAction";
 import { InventorySummaryPanel } from "@/components/InventorySummaryPanel";
+import { OrganizerContributionsPanel } from "@/components/OrganizerContributionsPanel";
 
 type LoadState =
   | { status: "loading" }
@@ -146,9 +147,25 @@ export default function PoolDetailPage() {
         </a>
       )}
 
+      {pool.state !== "DRAFT" && (
+        <a
+          href={`/pools/${pool.id}/contribute`}
+          className="mt-3 block rounded-lg border border-slate-200 bg-white p-4 hover:bg-slate-50"
+        >
+          <p className="text-base font-semibold text-slate-900">
+            Offer extra supplies to the class →
+          </p>
+          <p className="mt-1 text-sm text-slate-600">
+            Have more than you need? Offering it — completely optional — can
+            save another family a purchase.
+          </p>
+        </a>
+      )}
+
       {isOrganizer && pool.state !== "DRAFT" && (
-        <div className="mt-4">
+        <div className="mt-4 space-y-4">
           <InventorySummaryPanel poolId={pool.id} />
+          <OrganizerContributionsPanel poolId={pool.id} />
         </div>
       )}
 

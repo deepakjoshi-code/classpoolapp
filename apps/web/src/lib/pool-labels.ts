@@ -1,4 +1,4 @@
-import type { Pool, Requirement } from "./api/types";
+import type { Contribution, Pool, Requirement } from "./api/types";
 
 /**
  * Plain-language strictness copy for parents/organizers (PRD §3.3: "Modes:
@@ -68,4 +68,23 @@ export function inventoryCoverageMessage(
     return `You already have all ${totalCount} item${totalCount === 1 ? "" : "s"} covered!`;
   }
   return `${coveredCount} of ${totalCount} item${totalCount === 1 ? "" : "s"} already covered.`;
+}
+
+/**
+ * Plain-language status copy for a pledged/received contribution (PRD §5.4:
+ * `PLEDGED → RECEIVED`). Deliberately worded so the two states read as
+ * unambiguously different sentences, not just a color swap — a "state that's
+ * PLEDGED vs RECEIVED should read unambiguously different" per the task's
+ * accessibility bar, since color alone isn't a reliable signal (WCAG 2.1 AA
+ * 1.4.1). Shared between the parent's own pledge view and the organizer's
+ * confirmation list so the two surfaces never describe the same state two
+ * different ways.
+ */
+export const CONTRIBUTION_STATE_LABELS: Record<Contribution["state"], string> = {
+  PLEDGED: "Pledged — not yet received",
+  RECEIVED: "Received — thank you!",
+};
+
+export function contributionStateLabel(state: Contribution["state"]): string {
+  return CONTRIBUTION_STATE_LABELS[state] ?? state;
 }

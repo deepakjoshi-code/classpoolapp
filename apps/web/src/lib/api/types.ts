@@ -44,6 +44,7 @@ export type PoolDetail = DeepRequired<Schemas["PoolDetail"]>;
 export type Requirement = DeepRequired<Schemas["Requirement"]>;
 export type InventoryLine = DeepRequired<Schemas["InventoryLine"]>;
 export type InventorySummary = DeepRequired<Schemas["InventorySummary"]>;
+export type Contribution = DeepRequired<Schemas["Contribution"]>;
 
 /**
  * Request body type — left exactly as generated. Unlike the responses above,

@@ -345,6 +345,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pools/{poolId}/requirements/{requirementId}/contributions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A parent pledges surplus of this requirement to the class (PRD §5.1 "Offer surplus" / §5.4 contribution lifecycle — starts `PLEDGED`). V1 only supports `DONATE` (Give) — `LEND`/`SELL` are explicitly "later" per PRD §5.1; requesting them returns 400. `quantity` is the household's own independent declaration of how much extra they have to give — it is not derived from, or clamped by, their Phase 4 inventory answer (owning more than required and being willing to give some away are two separate facts). Caller must have a Membership on this classroom for the given `studentId`, same per-student authorization boundary as Phase 4's inventory PUT. */
+        post: operations["offerContribution"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/contributions/mine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's own pledged/received contributions across this pool. */
+        get: operations["getMyContributions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/contributions/{contributionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** The offering parent withdraws their own pledge before it's been marked received (contract: only valid while `state = PLEDGED` — 409 otherwise, since a RECEIVED contribution has already physically changed hands per PRD §5.4). */
+        delete: operations["withdrawContribution"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/contributions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every contribution pledged/received across this pool, for the organizer's confirmation workflow (PRD §12.3: "View unreceived contributions"). Organizer/co-organizer only — includes the offering household's identity, per PRD §5.3's privacy model ("the organizer can see contributor identity when necessary for drop-off coordination"). */
+        get: operations["listContributionsForOrganizer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/contributions/{contributionId}/receive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer confirms a pledged contribution has physically arrived (PRD §5.4: `PLEDGED → RECEIVED`). Only confirmed/received surplus counts toward reducing the class's residual demand (§6.1) — a still-`PLEDGED` contribution never does. Organizer/co-organizer only. 409 if the contribution is already `RECEIVED`. */
+        post: operations["markContributionReceived"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/household/dashboard": {
         parameters: {
             query?: never;
@@ -530,12 +615,32 @@ export interface components {
                 totalRequired?: number | null;
             }[];
         };
+        Contribution: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            requirementId?: string;
+            requirementName?: string;
+            /** Format: uuid */
+            studentId?: string;
+            studentFirstName?: string;
+            /** @description Only ever present to the organizer's own listing endpoint (PRD §5.3 privacy model) — omitted from the offering parent's own "mine" view, where it would be redundant, and never exposed to other parents. */
+            offeringParentDisplayName?: string | null;
+            quantity?: number;
+            /** @enum {string} */
+            mode?: "DONATE";
+            /** @enum {string} */
+            state?: "PLEDGED" | "RECEIVED";
+            /** Format: date-time */
+            createdAt?: string;
+        };
     };
     responses: never;
     parameters: {
         ClassroomId: string;
         PoolId: string;
         RequirementId: string;
+        ContributionId: string;
     };
     requestBodies: never;
     headers: never;
@@ -1231,6 +1336,186 @@ export interface operations {
             };
             /** @description Caller is not an organizer on this pool's classroom */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    offerContribution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                requirementId: components["parameters"]["RequirementId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    studentId: string;
+                    quantity: number;
+                    /**
+                     * @default DONATE
+                     * @enum {string}
+                     */
+                    mode?: "DONATE";
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Contribution"];
+                };
+            };
+            /** @description Unsupported mode (only DONATE in V1) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller has no Membership on this classroom for that student */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getMyContributions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Contribution"][];
+                };
+            };
+            /** @description Caller has no Membership on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    withdrawContribution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                contributionId: components["parameters"]["ContributionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Withdrawn */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller does not own this contribution */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Contribution is already RECEIVED — cannot withdraw */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listContributionsForOrganizer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Contribution"][];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    markContributionReceived: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                contributionId: components["parameters"]["ContributionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Contribution"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Contribution is already RECEIVED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
