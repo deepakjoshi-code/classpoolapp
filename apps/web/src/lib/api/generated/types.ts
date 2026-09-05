@@ -481,6 +481,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pools/{poolId}/requirements/{requirementId}/product-offers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer adds a candidate retailer pack offer for one requirement that still needs purchasing (PRD §7.3: pack qty, price, shipping, affiliate URL). Only while the pool is RECONCILING — offers are the raw material for `generatePurchasePlan`, so once a plan has been generated (PURCHASE_PROPOSED+) adding more isn't supported in V1, same one-shot instinct as reconcile itself. `affiliateUrl` is optional and unused until Phase 10's tracked click-through (PRD §7.4 PM update) — stored now so it doesn't need retrofitting later. */
+        post: operations["addProductOffer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/product-offers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every candidate offer entered so far across this pool's requirements, organizer-only. The frontend groups these by requirement itself, same "fetch once, group client-side" pattern as the allocation summary. */
+        get: operations["listProductOffers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/product-offers/{offerId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Organizer removes a candidate offer before generating the plan. 409 once a plan has already been generated for this pool — same one-shot boundary as adding one. */
+        delete: operations["removeProductOffer"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/purchase-plan/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer runs the bulk-pack optimizer (PRD §7.1): a deterministic integer program — find non-negative pack counts across the candidate offers entered for each requirement that still needs purchasing (residualDemand > 0 from Phase 6/7's reconcile) whose combined quantity covers that residual demand, minimizing total cost first and, among equally-cheap combinations, the fewest total units purchased (least waste) as the deterministic tie-break. Requires the pool to be RECONCILING, and at least one ProductOffer for every requirement with residualDemand > 0 — 409 naming which requirement(s) are still missing an offer. One-way: moves the pool RECONCILING → PURCHASE_PROPOSED; re-running isn't supported in V1 (409 if a plan already exists for this pool). */
+        post: operations["generatePurchasePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/purchase-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The generated plan, organizer-only. 409 if generate hasn't run yet. */
+        get: operations["getPurchasePlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/purchase-plan/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer approves the generated plan (PRD's V1 flow step "organizer selects plan"). PurchasePlan PROPOSED → APPROVED. Does not itself move the Pool's own state — billing/payment (Phase 9) owns the next pool-state transition once an approved plan exists. 409 if already approved, or no plan exists yet. */
+        post: operations["approvePurchasePlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/household/dashboard": {
         parameters: {
             query?: never;
@@ -722,6 +824,49 @@ export interface components {
         AllocationSummary: {
             allocations?: components["schemas"]["AllocationLine"][];
             residualDemand?: components["schemas"]["ResidualDemandLine"][];
+        };
+        ProductOffer: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            requirementId?: string;
+            requirementName?: string;
+            retailer?: string;
+            packQuantity?: number;
+            priceCents?: number;
+            shippingCents?: number;
+            affiliateUrl?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        PurchasePlanLine: {
+            /** Format: uuid */
+            requirementId?: string;
+            requirementName?: string;
+            /** Format: uuid */
+            productOfferId?: string;
+            retailer?: string;
+            packQuantity?: number;
+            /** @description How many of this pack size to buy. */
+            packCount?: number;
+            totalCostCents?: number;
+            /** @description Units purchased beyond residual demand, on this line (PRD §9.4's "the 8 surplus pens" — later feeds Class Reserve, but that's Phase 10). When a requirement's plan spans more than one offer/line, the whole requirement's waste is attributed to a single designated line, never double-counted across lines for the same requirement. */
+            wasteQuantity?: number;
+        };
+        PurchasePlan: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            poolId?: string;
+            /** @enum {string} */
+            state?: "PROPOSED" | "APPROVED";
+            /** @description Sum of totalCostCents across every line. */
+            totalCostCents?: number;
+            lines?: components["schemas"]["PurchasePlanLine"][];
+            /** Format: date-time */
+            proposedAt?: string;
+            /** Format: date-time */
+            approvedAt?: string | null;
         };
     };
     responses: never;
@@ -1706,6 +1851,229 @@ export interface operations {
             };
             /** @description Caller has no Membership on this pool's classroom */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    addProductOffer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                requirementId: components["parameters"]["RequirementId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @example Amazon */
+                    retailer: string;
+                    /** @example 24 */
+                    packQuantity: number;
+                    /** @example 499 */
+                    priceCents: number;
+                    /** @default 0 */
+                    shippingCents?: number;
+                    affiliateUrl?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductOffer"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool is not RECONCILING (either the plan is already generated, or reconcile hasn't run yet) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listProductOffers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductOffer"][];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    removeProductOffer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                offerId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A purchase plan has already been generated for this pool */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    generatePurchasePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurchasePlan"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool is not RECONCILING, a plan already exists, or a requirement with residual demand has no offers */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getPurchasePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurchasePlan"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No purchase plan has been generated for this pool yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    approvePurchasePlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PurchasePlan"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No plan exists yet, or it's already approved */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

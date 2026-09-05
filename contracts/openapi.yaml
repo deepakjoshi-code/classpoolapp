@@ -638,6 +638,144 @@ paths:
                 items: { $ref: "#/components/schemas/AllocationLine" }
         "403": { description: Caller has no Membership on this pool's classroom }
 
+  /pools/{poolId}/requirements/{requirementId}/product-offers:
+    post:
+      operationId: addProductOffer
+      summary: >
+        Organizer adds a candidate retailer pack offer for one requirement
+        that still needs purchasing (PRD §7.3: pack qty, price, shipping,
+        affiliate URL). Only while the pool is RECONCILING — offers are
+        the raw material for `generatePurchasePlan`, so once a plan has
+        been generated (PURCHASE_PROPOSED+) adding more isn't supported
+        in V1, same one-shot instinct as reconcile itself. `affiliateUrl`
+        is optional and unused until Phase 10's tracked click-through
+        (PRD §7.4 PM update) — stored now so it doesn't need retrofitting
+        later.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - $ref: "#/components/parameters/RequirementId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [retailer, packQuantity, priceCents]
+              properties:
+                retailer: { type: string, example: "Amazon" }
+                packQuantity: { type: integer, minimum: 1, example: 24 }
+                priceCents: { type: integer, minimum: 1, example: 499 }
+                shippingCents: { type: integer, minimum: 0, default: 0 }
+                affiliateUrl: { type: string, nullable: true }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductOffer" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "Pool is not RECONCILING (either the plan is already generated, or reconcile hasn't run yet)" }
+
+  /pools/{poolId}/product-offers:
+    get:
+      operationId: listProductOffers
+      summary: >
+        Every candidate offer entered so far across this pool's
+        requirements, organizer-only. The frontend groups these by
+        requirement itself, same "fetch once, group client-side" pattern
+        as the allocation summary.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProductOffer" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+
+  /pools/{poolId}/product-offers/{offerId}:
+    delete:
+      operationId: removeProductOffer
+      summary: >
+        Organizer removes a candidate offer before generating the plan.
+        409 once a plan has already been generated for this pool — same
+        one-shot boundary as adding one.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - name: offerId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Removed }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "A purchase plan has already been generated for this pool" }
+
+  /pools/{poolId}/purchase-plan/generate:
+    post:
+      operationId: generatePurchasePlan
+      summary: >
+        Organizer runs the bulk-pack optimizer (PRD §7.1): a deterministic
+        integer program — find non-negative pack counts across the
+        candidate offers entered for each requirement that still needs
+        purchasing (residualDemand > 0 from Phase 6/7's reconcile) whose
+        combined quantity covers that residual demand, minimizing total
+        cost first and, among equally-cheap combinations, the fewest
+        total units purchased (least waste) as the deterministic
+        tie-break. Requires the pool to be RECONCILING, and at least one
+        ProductOffer for every requirement with residualDemand > 0 — 409
+        naming which requirement(s) are still missing an offer. One-way:
+        moves the pool RECONCILING → PURCHASE_PROPOSED; re-running isn't
+        supported in V1 (409 if a plan already exists for this pool).
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchasePlan" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "Pool is not RECONCILING, a plan already exists, or a requirement with residual demand has no offers" }
+
+  /pools/{poolId}/purchase-plan:
+    get:
+      operationId: getPurchasePlan
+      summary: The generated plan, organizer-only. 409 if generate hasn't run yet.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchasePlan" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: No purchase plan has been generated for this pool yet }
+
+  /pools/{poolId}/purchase-plan/approve:
+    post:
+      operationId: approvePurchasePlan
+      summary: >
+        Organizer approves the generated plan (PRD's V1 flow step
+        "organizer selects plan"). PurchasePlan PROPOSED → APPROVED. Does
+        not itself move the Pool's own state — billing/payment (Phase 9)
+        owns the next pool-state transition once an approved plan exists.
+        409 if already approved, or no plan exists yet.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchasePlan" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "No plan exists yet, or it's already approved" }
+
   /household/dashboard:
     get:
       operationId: getHouseholdDashboard
@@ -935,3 +1073,49 @@ components:
         residualDemand:
           type: array
           items: { $ref: "#/components/schemas/ResidualDemandLine" }
+
+    ProductOffer:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        requirementId: { type: string, format: uuid }
+        requirementName: { type: string }
+        retailer: { type: string }
+        packQuantity: { type: integer }
+        priceCents: { type: integer }
+        shippingCents: { type: integer }
+        affiliateUrl: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    PurchasePlanLine:
+      type: object
+      properties:
+        requirementId: { type: string, format: uuid }
+        requirementName: { type: string }
+        productOfferId: { type: string, format: uuid }
+        retailer: { type: string }
+        packQuantity: { type: integer }
+        packCount: { type: integer, description: How many of this pack size to buy. }
+        totalCostCents: { type: integer }
+        wasteQuantity:
+          type: integer
+          description: >
+            Units purchased beyond residual demand, on this line (PRD
+            §9.4's "the 8 surplus pens" — later feeds Class Reserve, but
+            that's Phase 10). When a requirement's plan spans more than
+            one offer/line, the whole requirement's waste is attributed
+            to a single designated line, never double-counted across
+            lines for the same requirement.
+
+    PurchasePlan:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        poolId: { type: string, format: uuid }
+        state: { type: string, enum: [PROPOSED, APPROVED] }
+        totalCostCents: { type: integer, description: Sum of totalCostCents across every line. }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/PurchasePlanLine" }
+        proposedAt: { type: string, format: date-time }
+        approvedAt: { type: string, format: date-time, nullable: true }
