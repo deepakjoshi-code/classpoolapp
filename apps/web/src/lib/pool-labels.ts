@@ -1,4 +1,10 @@
-import type { AllocationStatus, Contribution, Pool, Requirement } from "./api/types";
+import type {
+  AllocationStatus,
+  Contribution,
+  Pool,
+  PurchasePlan,
+  Requirement,
+} from "./api/types";
 
 /**
  * Plain-language strictness copy for parents/organizers (PRD §3.3: "Modes:
@@ -137,4 +143,45 @@ export function allocationStatusLabel(
     return `Still needs ${purchaseNeeded} — will be part of the class purchase`;
   }
   return ALLOCATION_STATUS_LABELS[status] ?? status;
+}
+
+/**
+ * States a pool passes through *before* a purchase plan exists for it (PRD
+ * §7-8's bulk-pack purchase-plan engine, described here without that
+ * internal name) — i.e. before `POST /pools/{poolId}/purchase-plan/generate`
+ * has run. Same "or later" shape as `POOL_STATES_BEFORE_RECONCILING`/
+ * `hasReconciled` above, just one transition further along: everything up to
+ * and including `RECONCILING` has no plan yet, `PURCHASE_PROPOSED` is the
+ * first state that does, and every state after that (`PAYMENT_OPEN`,
+ * `ORDERED`, `DISTRIBUTING`, `COMPLETED` — the rest of `Pool["state"]`) keeps
+ * one, so `PurchasePlanPanel` stays mounted through all of them rather than
+ * disappearing once billing/ordering moves the pool state further along.
+ */
+const POOL_STATES_BEFORE_PURCHASE_PLAN: ReadonlySet<Pool["state"]> = new Set([
+  "DRAFT",
+  "OPEN_FOR_INVENTORY",
+  "OPEN_FOR_CONTRIBUTIONS",
+  "RECONCILING",
+]);
+
+export function hasPurchasePlan(state: Pool["state"]): boolean {
+  return !POOL_STATES_BEFORE_PURCHASE_PLAN.has(state);
+}
+
+/**
+ * Plain-language status copy for a `PurchasePlan.state` (PROPOSED ->
+ * APPROVED). Same "one sentence, reused verbatim" approach as
+ * `CONTRIBUTION_STATE_LABELS`/`ALLOCATION_STATUS_LABELS` above — there's only
+ * one read surface for this today (`PurchasePlanPanel`), but the helper is
+ * kept alongside the others rather than inlined so a second surface (e.g. a
+ * future household-facing "what's happening with the purchase" view) reuses
+ * identical wording rather than re-describing the same two states.
+ */
+export const PURCHASE_PLAN_STATE_LABELS: Record<PurchasePlan["state"], string> = {
+  PROPOSED: "Waiting for your approval",
+  APPROVED: "Approved",
+};
+
+export function purchasePlanStateLabel(state: PurchasePlan["state"]): string {
+  return PURCHASE_PLAN_STATE_LABELS[state] ?? state;
 }

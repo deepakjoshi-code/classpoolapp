@@ -60,6 +60,19 @@ export type ResidualDemandLine = DeepRequired<Schemas["ResidualDemandLine"]>;
 export type AllocationSummary = DeepRequired<Schemas["AllocationSummary"]>;
 
 /**
+ * The bulk-pack purchase-plan engine's raw material and output (PRD §7-8) —
+ * `ProductOffer` is a candidate retailer pack an organizer enters per
+ * requirement (`POST/GET/DELETE .../product-offers`); `PurchasePlan` (made
+ * of `PurchasePlanLine`s) is what `POST .../purchase-plan/generate` computes
+ * from those offers. Same `DeepRequired` narrowing as every other response
+ * type above — none of these declare a contract `required:` list either,
+ * even though fields like `ProductOffer.id` are obviously always present.
+ */
+export type ProductOffer = DeepRequired<Schemas["ProductOffer"]>;
+export type PurchasePlanLine = DeepRequired<Schemas["PurchasePlanLine"]>;
+export type PurchasePlan = DeepRequired<Schemas["PurchasePlan"]>;
+
+/**
  * Request body type — left exactly as generated. Unlike the responses above,
  * this one already carries a real `required:` list in the contract
  * (schoolYearLabel, grade, teacherLabel), and the rest (schoolId vs.
