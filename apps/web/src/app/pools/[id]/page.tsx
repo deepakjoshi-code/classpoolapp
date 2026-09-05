@@ -6,7 +6,7 @@ import { api } from "@/lib/api/client";
 import type { PoolDetail } from "@/lib/api/types";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { setPendingRedirect } from "@/lib/pending-redirect";
-import { hasReconciled, poolStateLabel } from "@/lib/pool-labels";
+import { hasPurchasePlan, hasReconciled, poolStateLabel } from "@/lib/pool-labels";
 import { RequirementForm } from "@/components/RequirementForm";
 import { RequirementListItem } from "@/components/RequirementListItem";
 import { ConfirmPoolAction } from "@/components/ConfirmPoolAction";
@@ -15,6 +15,8 @@ import { OrganizerContributionsPanel } from "@/components/OrganizerContributions
 import { ReconcileAction } from "@/components/ReconcileAction";
 import { OrganizerAllocationPanel } from "@/components/OrganizerAllocationPanel";
 import { MyAllocationPanel } from "@/components/MyAllocationPanel";
+import { GeneratePurchasePlanAction } from "@/components/GeneratePurchasePlanAction";
+import { PurchasePlanPanel } from "@/components/PurchasePlanPanel";
 
 type LoadState =
   | { status: "loading" }
@@ -185,7 +187,20 @@ export default function PoolDetailPage() {
 
       {hasReconciled(pool.state) && (
         <div className="mt-4 space-y-4">
-          {isOrganizer && <OrganizerAllocationPanel poolId={pool.id} />}
+          {isOrganizer && (
+            <OrganizerAllocationPanel poolId={pool.id} poolState={pool.state} />
+          )}
+          {isOrganizer && pool.state === "RECONCILING" && (
+            <GeneratePurchasePlanAction
+              poolId={pool.id}
+              onGenerated={() =>
+                updatePool((prev) => ({ ...prev, state: "PURCHASE_PROPOSED" }))
+              }
+            />
+          )}
+          {isOrganizer && hasPurchasePlan(pool.state) && (
+            <PurchasePlanPanel poolId={pool.id} />
+          )}
           <MyAllocationPanel poolId={pool.id} />
         </div>
       )}
