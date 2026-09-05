@@ -27,4 +27,18 @@ public interface RequirementRepository extends JpaRepository<Requirement, UUID> 
 
         long getTotal();
     }
+
+    /**
+     * Batch {@code extractedRequirementCount} for {@code listRequirementSources} (Phase 11), same
+     * batch-not-N+1 instinct as {@link #countByPoolIdIn}, one join further in (source, not pool).
+     */
+    @Query("select r.requirementSourceId as sourceId, count(r) as total from Requirement r "
+            + "where r.requirementSourceId in :sourceIds group by r.requirementSourceId")
+    List<SourceRequirementCount> countByRequirementSourceIdIn(@Param("sourceIds") List<UUID> sourceIds);
+
+    interface SourceRequirementCount {
+        UUID getSourceId();
+
+        long getTotal();
+    }
 }

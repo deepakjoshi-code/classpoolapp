@@ -7,13 +7,13 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * A single supply-list line item within a {@link Pool} (PRD §3). {@code requirement_source_id}
- * from the V1 migration is intentionally unmapped here — Phase 3 is the manual-entry path only
- * (PRD §3.2 update: manual entry is a permanent parallel path, not a pre-AI placeholder), so every
- * Requirement this phase creates has no {@code RequirementSource} row to reference; it stays null
- * via the column's own nullability. {@code sourceEvidence}/{@code confidence} are likewise always
- * null for manual entries — only Phase 11's AI extraction populates them (contract's own
- * description on both fields).
+ * A single supply-list line item within a {@link Pool} (PRD §3). {@code requirement_source_id}/
+ * {@code source_evidence}/{@code confidence} stay {@code null} for every Requirement created via
+ * the manual-entry constructor below ({@code RequirementService.add}, PRD §3.2 update: manual
+ * entry is a permanent parallel path, not a pre-AI placeholder) — {@link #attachExtractionSource}
+ * is the only way those three fields ever get populated, and only Phase 11's {@code
+ * RequirementImportService} calls it, for a Requirement produced by {@code
+ * AiExtractionGateway.extract}.
  */
 @Entity
 @Table(name = "requirement")
@@ -25,6 +25,9 @@ public class Requirement {
 
     @Column(name = "pool_id", nullable = false)
     private UUID poolId;
+
+    @Column(name = "requirement_source_id")
+    private UUID requirementSourceId;
 
     @Column(nullable = false)
     private String name;
@@ -89,12 +92,31 @@ public class Requirement {
         this.strictness = strictness == null ? RequirementStrictness.EQUIVALENT_ALLOWED : strictness;
     }
 
+    /**
+     * Phase 11's only mutation path for these three fields — called once, right after
+     * construction, by {@code RequirementImportService} for a Requirement built from an {@code
+     * AiExtractionGateway.ExtractedRequirement}. {@code state} is passed in rather than derived
+     * here so the 0.85 confidence-threshold policy stays in the service layer (matching every other
+     * state-machine decision in this codebase — see {@code RequirementService}/{@code PoolService}).
+     */
+    public void attachExtractionSource(UUID requirementSourceId, String sourceEvidence, BigDecimal confidence,
+                                        RequirementState state) {
+        this.requirementSourceId = requirementSourceId;
+        this.sourceEvidence = sourceEvidence;
+        this.confidence = confidence;
+        this.state = state;
+    }
+
     public UUID getId() {
         return id;
     }
 
     public UUID getPoolId() {
         return poolId;
+    }
+
+    public UUID getRequirementSourceId() {
+        return requirementSourceId;
     }
 
     public String getName() {
