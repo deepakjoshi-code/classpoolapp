@@ -1,6 +1,7 @@
 import type {
   AllocationStatus,
   Contribution,
+  Payment,
   Pool,
   PurchasePlan,
   Requirement,
@@ -184,4 +185,52 @@ export const PURCHASE_PLAN_STATE_LABELS: Record<PurchasePlan["state"], string> =
 
 export function purchasePlanStateLabel(state: PurchasePlan["state"]): string {
   return PURCHASE_PLAN_STATE_LABELS[state] ?? state;
+}
+
+/**
+ * States a pool passes through *before* per-household `Payment`s exist for
+ * it (PRD §8's Stripe Connect payment collection, following the approved
+ * purchase plan) — i.e. before `POST /pools/{poolId}/payments/generate` has
+ * run. Same "or later" shape as `POOL_STATES_BEFORE_PURCHASE_PLAN`/
+ * `hasPurchasePlan` above, one transition further along: everything up to
+ * and including `PURCHASE_PROPOSED` has no payments yet, `PAYMENT_OPEN` is
+ * the first state that does, and every state after that (`ORDERED`,
+ * `DISTRIBUTING`, `COMPLETED`) keeps them — `OrganizerPaymentsPanel` and
+ * `PaymentsThresholdPanel` stay mounted through all of them rather than
+ * disappearing once the pool moves on to ordering/distribution.
+ */
+const POOL_STATES_BEFORE_PAYMENTS: ReadonlySet<Pool["state"]> = new Set([
+  "DRAFT",
+  "OPEN_FOR_INVENTORY",
+  "OPEN_FOR_CONTRIBUTIONS",
+  "RECONCILING",
+  "PURCHASE_PROPOSED",
+]);
+
+export function hasPayments(state: Pool["state"]): boolean {
+  return !POOL_STATES_BEFORE_PAYMENTS.has(state);
+}
+
+/**
+ * Plain-language status copy for a `Payment.state` (PRD §8.4 — Stripe card/
+ * Apple Pay/Google Pay, plus the cash fallback and refund states). Shared,
+ * identical wording between the organizer's per-household list
+ * (`OrganizerPaymentsPanel`) and a household's own payment page — same
+ * "one sentence, reused verbatim across surfaces" approach as
+ * `CONTRIBUTION_STATE_LABELS`/`ALLOCATION_STATUS_LABELS`/
+ * `PURCHASE_PLAN_STATE_LABELS` above, so raw enum values (`PENDING_CASH`,
+ * `PAID_CASH_RECEIVED`, …) never reach either screen.
+ */
+export const PAYMENT_STATE_LABELS: Record<Payment["state"], string> = {
+  PENDING: "Payment due",
+  PAID: "Paid",
+  FAILED: "Payment failed",
+  REFUNDED: "Refunded",
+  PARTIALLY_REFUNDED: "Partially refunded",
+  PENDING_CASH: "Paying by cash/check — arrange with the organizer",
+  PAID_CASH_RECEIVED: "Paid by cash — received",
+};
+
+export function paymentStateLabel(state: Payment["state"]): string {
+  return PAYMENT_STATE_LABELS[state] ?? state;
 }

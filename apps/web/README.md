@@ -7,10 +7,13 @@ Phase 4 (household inventory — "Shop Your Home First"), Phase 5
 (contribution pool — offer/withdraw surplus, organizer receive confirmation),
 Phase 6 (allocation & residual demand — organizer "work out what still
 needs buying" action, organizer purchase breakdown, household's own status
-view), and Phase 7+8 (product-offer entry and the bulk-pack purchase plan —
+view), Phase 7+8 (product-offer entry and the bulk-pack purchase plan —
 organizer candidate price options per item, "work out the cheapest way to
 buy what's left" action, the generated plan with its running total and an
-approve step) of the V1 build order — see `../../ARCHITECTURE.md` §4 and
+approve step), and Phase 9 (Stripe Connect payment collection — organizer
+bank-account onboarding, generating each household's payment, a household's
+own pay screen, cash fallback + refund, and the 90%-threshold finalize gate)
+of the V1 build order — see `../../ARCHITECTURE.md` §4 and
 `../../docs/PRD.md` §17.3.
 
 ## Running it
@@ -162,6 +165,45 @@ Component tests live in `src/tests/` (Vitest + React Testing Library), per
   plain language (never the raw enum), the not-yet-generated 409 handled
   gracefully, and the approve action's explicit-confirm-then-success path
   updating local state (to `APPROVED`) without a full reload.
+- `StripeOnboardingCard.test.tsx` — organizer Stripe onboarding (PRD §8.4):
+  a not-started 404 shows the connect CTA and starting it calls `POST
+  .../stripe-onboarding`; from `PENDING`, "Simulate returning from Stripe"
+  calls `POST .../stripe-onboarding/complete` and flips to the confirmed
+  `ACTIVE` state; an already-`ACTIVE` account renders the confirmed state
+  directly with no onboarding buttons and no POST calls.
+- `GeneratePaymentsAction.test.tsx` — the organizer's one-way "open payment
+  for this pool" action (PRD §8.1-8.3): asserts a specific, named reason is
+  shown instead of a dead button when the purchase plan isn't `APPROVED` yet
+  or Stripe isn't `ACTIVE` yet (including a never-started 404), that `POST
+  /pools/{id}/payments/generate` is unreachable without first passing
+  through the "this can't be undone" step once both preconditions are met,
+  and that cancelling that step backs out without calling the API.
+- `OrganizerPaymentsPanel.test.tsx` — the organizer's per-household payment
+  list (PRD §8.4): fetches `GET /pools/{id}/payments` and renders each
+  household's identity/amount (as dollars)/plain-language state, shows "Mark
+  cash pending" only on a `PENDING` row and "Mark cash received" only once
+  it's `PENDING_CASH` (never both), shows a refund button only for
+  `PAID`/`PAID_CASH_RECEIVED` rows (never `PENDING`/`REFUNDED`/etc.) and
+  never once the pool has reached `ORDERED`, and a fallback message on a
+  403.
+- `PaymentsThresholdPanel.test.tsx` — the organizer's payment-threshold view
+  and finalize action (PRD §8.4 update): renders percent collected and the
+  outstanding-households risk banner only when below the 90% threshold;
+  below threshold, asserts the finalize confirm button stays disabled until
+  an explicit checkbox is ticked and then sends `acknowledgeBelowThreshold:
+  true`; at/above threshold, asserts a normal one-step confirm with no
+  checkbox sends `acknowledgeBelowThreshold: false`; and that the finalize
+  action disappears (replaced by a "already finalized" message) once the
+  pool has moved past `PAYMENT_OPEN`.
+- `PoolPaymentPage.test.tsx` — a household's own payment screen (PRD §8.4):
+  a `null` response reads as a plain "nothing to pay" message with no pay
+  button; a `PENDING` payment renders the amount, the required "you're
+  paying the class organizer, not ClassPool" disclosure, and a pay action
+  that calls `POST .../pay` with `{ method: "CARD" }` and updates to the
+  paid state on success; any other state (e.g. `PAID_CASH_RECEIVED`) shows
+  plain language with no pay button; and — the privacy check —
+  `householdDisplayName` is asserted absent from the page even when a mock
+  deliberately includes it.
 
 ## API client — generated from the contract
 
@@ -230,9 +272,10 @@ local inventory edits" — not yet built, out of scope for Phase 1-2).
 | `/classrooms/[id]/invite` | Join link + QR + one-tap share, shown right after creation |
 | `/join/[token]` | Public, pre-auth invite landing page → sign-in → student-name join step |
 | `/classrooms/[id]/pools/new` | Organizer/co-organizer only: name a pool ("Fall Supplies") and start it in `DRAFT` |
-| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4). While the pool is `OPEN_FOR_INVENTORY`, an organizer also sees `ReconcileAction` — the one-way "work out what still needs buying" step. Once the pool has moved past that (`RECONCILING` or later), everyone sees `MyAllocationPanel` (their own household's status) and an organizer additionally sees `OrganizerAllocationPanel` (the full purchase breakdown) (Phase 6). While still `RECONCILING`, that same panel also embeds a `ProductOfferForm` per item that still needs buying, and the organizer sees `GeneratePurchasePlanAction` — the one-way "work out the cheapest way to buy what's left" step; once a plan exists (`PURCHASE_PROPOSED` or later) the organizer additionally sees `PurchasePlanPanel` (chosen retailer/pack/cost per item, running total, and an approve step) (Phase 7+8) |
+| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4). While the pool is `OPEN_FOR_INVENTORY`, an organizer also sees `ReconcileAction` — the one-way "work out what still needs buying" step. Once the pool has moved past that (`RECONCILING` or later), everyone sees `MyAllocationPanel` (their own household's status) and an organizer additionally sees `OrganizerAllocationPanel` (the full purchase breakdown) (Phase 6). While still `RECONCILING`, that same panel also embeds a `ProductOfferForm` per item that still needs buying, and the organizer sees `GeneratePurchasePlanAction` — the one-way "work out the cheapest way to buy what's left" step; once a plan exists (`PURCHASE_PROPOSED` or later) the organizer additionally sees `PurchasePlanPanel` (chosen retailer/pack/cost per item, running total, and an approve step) (Phase 7+8). Once a plan exists an organizer also sees `StripeOnboardingCard` (connect a bank account for this classroom); while the pool is `PURCHASE_PROPOSED` they see `GeneratePaymentsAction` — the one-way "open payment for this pool" step, gated on the plan being `APPROVED` and Stripe being `ACTIVE`; once payments exist (`PAYMENT_OPEN` or later) an organizer additionally sees `PaymentsThresholdPanel` (percent collected, the below-90% risk banner, and the finalize action) and `OrganizerPaymentsPanel` (every household's payment, with cash-fallback and refund actions), and everyone sees a link to `/pools/[id]/payment` (Phase 9) |
 | `/pools/[id]/inventory` | "Shop Your Home First" (PRD §4) — the caller's own household inventory checklist: one +/- stepper row per (requirement, student) they have in this classroom (Phase 4) |
 | `/pools/[id]/contribute` | "Offer surplus" (PRD §5.1) — the caller's own pledge screen: one offer card per (requirement, student) they have in this classroom, showing their own pledge status and a withdraw action while still `PLEDGED`. Linked from `/pools/[id]` once the pool is past `DRAFT`, alongside (but visually secondary to, per the "optional/low-pressure" framing) the inventory link (Phase 5). The organizer's confirmation view is not a page — it's `OrganizerContributionsPanel`, embedded directly on `/pools/[id]` next to the inventory summary, same as Phase 4 |
+| `/pools/[id]/payment` | The caller's own household payment screen (PRD §8.4) — `GET /pools/{poolId}/payments/mine`. `null` reads as "nothing to pay" (not generated yet, or no residual demand); a `PENDING` payment shows the amount, the required "you're paying the class organizer, not ClassPool" disclosure, and a single "Pay with card" action (a V1 stub — see below); any other state shows plain-language status with no pay button. Linked from `/pools/[id]` once `hasPayments(pool.state)` (Phase 9) |
 
 Phase 6's allocation views are all embedded directly on `/pools/[id]`, not
 separate pages — same pattern as Phase 4's `InventorySummaryPanel` and
@@ -270,6 +313,60 @@ carries integer cents, and only the UI boundary — a price input, a
 `formatCents` call — ever converts to/from a dollar amount. Copy again avoids
 the PRD's internal "optimizer"/"integer program"/"bulk-pack" terms (§7-8) in
 favor of plain language ("work out the cheapest way to buy what's left").
+
+Phase 9 (Stripe Connect payment collection, PRD §8.4) continues the same
+"embed the organizer views on `/pools/[id]`, one dedicated page for a
+household's own view" split as every prior phase, plus the same
+`hasX(pool.state)`-in-`pool-labels.ts` gating pattern (`hasPayments`, mirror
+of `hasPurchasePlan`). `StripeOnboardingCard` is keyed by *classroom*, not
+pool — one Stripe account per classroom serves every pool it ever runs — and
+treats a 404 from `GET .../stripe-onboarding/status` ("never started") as a
+normal not-started state, same "absence is a valid state" idea as
+`MyAllocationPanel`'s empty array. There's no real Stripe hosted-onboarding
+redirect in this environment, so after starting onboarding the card is
+explicit that its "Simulate returning from Stripe" button
+(`POST .../stripe-onboarding/complete`) stands in for that redirect, not a
+real bank-account connection.
+
+`GeneratePaymentsAction` is the one new "transition action" whose own
+preconditions (an *approved* purchase plan, an *ACTIVE* Stripe account)
+aren't fully captured by `pool.state` alone — `PURCHASE_PROPOSED` covers
+both a still-`PROPOSED` and an already-`APPROVED` plan — so unlike every
+earlier one-way action in this app, it checks both preconditions itself on
+mount (`GET .../purchase-plan`, `GET .../stripe-onboarding/status`) and
+renders a specific, named reason instead of a dead button when either isn't
+met, rather than relying purely on "trust the mount point." The one 409 this
+button can still reach in normal use (payments already generated) gets the
+same generic-conflict handling as everywhere else.
+
+`OrganizerPaymentsPanel` renders `Payment.householdDisplayName` — per the
+contract's own doc comment, "same privacy posture as
+`Contribution.offeringParentDisplayName`" — so it's mounted only inside the
+pool page's `isOrganizer` branch, same boundary `OrganizerContributionsPanel`
+draws (see that component's PRIVACY note and its end-to-end visibility
+test). `/pools/[id]/payment` (the household's own view, `GET
+.../payments/mine`) never receives or renders that field — the contract
+notes it's always `null` on that endpoint anyway, but the page doesn't rely
+on that alone; `PoolPaymentPage.test.tsx` asserts it stays absent even if a
+mock sends it. `paymentStateLabel` in `pool-labels.ts` is shared verbatim by
+both surfaces, so `PENDING_CASH`/`PAID_CASH_RECEIVED` never reach either
+screen as raw enum values.
+
+`PaymentsThresholdPanel`'s finalize action treats "proceed below the 90%
+threshold" with the same weight as `PurchasePlanPanel`'s
+approve-with-money-at-stake confirm, but stronger: below threshold, the
+confirm button stays disabled until an explicit checkbox is ticked (not just
+a second click), then sends `acknowledgeBelowThreshold: true`; at/above
+threshold it's a single deliberate confirm step with no checkbox, sending
+`acknowledgeBelowThreshold: false`. `pay` (a household paying their own
+`Payment`) is a V1 stub per the task brief — it immediately marks the
+payment `PAID` with no real Stripe redirect or card entry — but the
+PRD-required "you're paying the class organizer, not ClassPool" disclosure
+is still shown before the button regardless, since that's a real product
+requirement independent of whether Stripe is live. There's no organizer-name
+field anywhere in the contract (`Classroom.teacherLabel` names the teacher,
+not necessarily the organizing parent), so the disclosure uses the honest
+fallback "the class organizer" rather than inventing one.
 
 ## Known discrepancies / assumptions against the contract
 
@@ -405,3 +502,29 @@ Flagged here rather than editing `contracts/openapi.yaml` unilaterally:
     distinguished (e.g. a `reason` field or per-requirement detail in the
     409 body) rather than relying on client-side gating to make the
     single message accurate.
+13. **No organizer-name field exists anywhere in the contract (Phase 9).**
+    The PRD-required payment disclosure ("You're paying [organizer name],
+    the class organizer — not ClassPool") names a specific person, but
+    neither `Classroom`, `Pool`/`PoolDetail`, nor `Payment` carries one —
+    `Classroom.teacherLabel` names the teacher the class is *for*, not
+    necessarily the parent who organized the pool, and there's no
+    `Membership`-level "who is the organizer" identity exposed to a
+    non-organizer caller. `/pools/[id]/payment` uses the honest fallback
+    "the class organizer" rather than inventing a name field the contract
+    doesn't define. Worth a follow-up contract conversation if product wants
+    the real organizer's name in this copy — likely a new field on `Pool`/
+    `PoolDetail` or `Payment` naming the organizing household.
+14. **`generatePayments`'s 409 also collapses multiple failure reasons with
+    no distinguishing field (Phase 9)**, same shape as item 12 above ("no
+    approved purchase plan, Stripe onboarding isn't ACTIVE, or payments
+    already exist"). Here there's an added wrinkle: unlike the purchase-plan
+    generator, this button's own gating (`pool.state === "PURCHASE_PROPOSED"`)
+    genuinely can't distinguish "plan not approved yet" from "Stripe not
+    connected yet" — both keep the pool in `PURCHASE_PROPOSED`. Rather than
+    rely on "trust the mount point" here, `GeneratePaymentsAction` checks
+    both preconditions itself (`GET .../purchase-plan` for `state ===
+    "APPROVED"`, `GET .../stripe-onboarding/status` for `status ===
+    "ACTIVE"`) and shows a specific, named reason instead of the action when
+    either isn't met, so the only 409 actually reachable by clicking the
+    button in normal use is "payments already exist" — same generic-conflict
+    message used elsewhere for an unreachable-in-practice case.

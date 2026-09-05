@@ -6,7 +6,7 @@ import { api } from "@/lib/api/client";
 import type { PoolDetail } from "@/lib/api/types";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { setPendingRedirect } from "@/lib/pending-redirect";
-import { hasPurchasePlan, hasReconciled, poolStateLabel } from "@/lib/pool-labels";
+import { hasPayments, hasPurchasePlan, hasReconciled, poolStateLabel } from "@/lib/pool-labels";
 import { RequirementForm } from "@/components/RequirementForm";
 import { RequirementListItem } from "@/components/RequirementListItem";
 import { ConfirmPoolAction } from "@/components/ConfirmPoolAction";
@@ -17,6 +17,10 @@ import { OrganizerAllocationPanel } from "@/components/OrganizerAllocationPanel"
 import { MyAllocationPanel } from "@/components/MyAllocationPanel";
 import { GeneratePurchasePlanAction } from "@/components/GeneratePurchasePlanAction";
 import { PurchasePlanPanel } from "@/components/PurchasePlanPanel";
+import { StripeOnboardingCard } from "@/components/StripeOnboardingCard";
+import { GeneratePaymentsAction } from "@/components/GeneratePaymentsAction";
+import { OrganizerPaymentsPanel } from "@/components/OrganizerPaymentsPanel";
+import { PaymentsThresholdPanel } from "@/components/PaymentsThresholdPanel";
 
 type LoadState =
   | { status: "loading" }
@@ -167,6 +171,21 @@ export default function PoolDetailPage() {
         </a>
       )}
 
+      {hasPayments(pool.state) && (
+        <a
+          href={`/pools/${pool.id}/payment`}
+          className="mt-3 block rounded-lg border-2 border-brand-200 bg-brand-50 p-4 hover:bg-brand-100"
+        >
+          <p className="text-base font-semibold text-brand-900">
+            Your payment →
+          </p>
+          <p className="mt-1 text-sm text-brand-800">
+            See what your household owes for this pool's purchase, and pay
+            it.
+          </p>
+        </a>
+      )}
+
       {isOrganizer && pool.state !== "DRAFT" && (
         <div className="mt-4 space-y-4">
           <InventorySummaryPanel poolId={pool.id} />
@@ -200,6 +219,30 @@ export default function PoolDetailPage() {
           )}
           {isOrganizer && hasPurchasePlan(pool.state) && (
             <PurchasePlanPanel poolId={pool.id} />
+          )}
+          {isOrganizer && hasPurchasePlan(pool.state) && (
+            <StripeOnboardingCard classroomId={pool.classroomId} />
+          )}
+          {isOrganizer && pool.state === "PURCHASE_PROPOSED" && (
+            <GeneratePaymentsAction
+              poolId={pool.id}
+              classroomId={pool.classroomId}
+              onGenerated={() =>
+                updatePool((prev) => ({ ...prev, state: "PAYMENT_OPEN" }))
+              }
+            />
+          )}
+          {isOrganizer && hasPayments(pool.state) && (
+            <>
+              <PaymentsThresholdPanel
+                poolId={pool.id}
+                poolState={pool.state}
+                onFinalized={(finalized) =>
+                  setState({ status: "ready", pool: finalized })
+                }
+              />
+              <OrganizerPaymentsPanel poolId={pool.id} poolState={pool.state} />
+            </>
           )}
           <MyAllocationPanel poolId={pool.id} />
         </div>

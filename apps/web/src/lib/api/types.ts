@@ -73,6 +73,21 @@ export type PurchasePlanLine = DeepRequired<Schemas["PurchasePlanLine"]>;
 export type PurchasePlan = DeepRequired<Schemas["PurchasePlan"]>;
 
 /**
+ * Stripe Connect onboarding + payment collection (PRD §8.4) — organizer
+ * onboarding status per classroom, and the per-household `Payment`s a
+ * `POST /pools/{poolId}/payments/generate` produces once a purchase plan is
+ * approved. Same `DeepRequired` narrowing as every other response type
+ * above. `OrganizerStripeAccount.onboardingUrl` and `Payment.method` /
+ * `Payment.householdDisplayName` / `OutstandingHousehold.householdDisplayName`
+ * keep their `| null` — DeepRequired only removes the *optional* (`?`), it
+ * doesn't touch a schema's own `nullable` fields.
+ */
+export type OrganizerStripeAccount = DeepRequired<Schemas["OrganizerStripeAccount"]>;
+export type Payment = DeepRequired<Schemas["Payment"]>;
+export type OutstandingHousehold = DeepRequired<Schemas["OutstandingHousehold"]>;
+export type PaymentsSummary = DeepRequired<Schemas["PaymentsSummary"]>;
+
+/**
  * Request body type — left exactly as generated. Unlike the responses above,
  * this one already carries a real `required:` list in the contract
  * (schoolYearLabel, grade, teacherLabel), and the rest (schoolId vs.
