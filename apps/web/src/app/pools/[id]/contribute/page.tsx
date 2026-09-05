@@ -18,8 +18,17 @@ type StudentInClassroom = {
   studentFirstName: string | null;
 };
 
-function contributionKey(c: Pick<Contribution, "requirementId" | "studentId">): string {
-  return `${c.requirementId}:${c.studentId}`;
+/**
+ * Keyed by requirementId alone, not studentId — a contribution is recorded
+ * against the offering household, not a specific student (the `contribution`
+ * table has no student_id column; see apps/api/README.md's "Flagged schema
+ * gap"), so `Contribution.studentId` from the API is always null and can't
+ * be used to attribute a pledge to one child's card. A household with more
+ * than one student in this classroom will see the same pledge reflected on
+ * every sibling's card for that requirement.
+ */
+function contributionKey(c: Pick<Contribution, "requirementId">): string {
+  return c.requirementId;
 }
 
 /**
@@ -215,12 +224,7 @@ export default function OfferSurplusPage() {
                 studentId={student.studentId}
                 studentFirstName={student.studentFirstName}
                 contributions={contributions.filter(
-                  (c) =>
-                    contributionKey(c) ===
-                    contributionKey({
-                      requirementId: requirement.id,
-                      studentId: student.studentId,
-                    })
+                  (c) => contributionKey(c) === contributionKey({ requirementId: requirement.id })
                 )}
                 onOffered={handleOffered}
                 onWithdrawn={handleWithdrawn}
