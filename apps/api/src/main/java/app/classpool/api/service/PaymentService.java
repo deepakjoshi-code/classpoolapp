@@ -3,6 +3,8 @@ package app.classpool.api.service;
 import app.classpool.api.domain.AllocationLine;
 import app.classpool.api.domain.AppUser;
 import app.classpool.api.domain.Household;
+import app.classpool.api.domain.Membership;
+import app.classpool.api.domain.NotificationType;
 import app.classpool.api.domain.OrganizerStripeAccount;
 import app.classpool.api.domain.OrganizerStripeAccountStatus;
 import app.classpool.api.domain.Payment;
@@ -30,6 +32,7 @@ import app.classpool.api.exception.NotFoundException;
 import app.classpool.api.repository.AllocationLineRepository;
 import app.classpool.api.repository.AppUserRepository;
 import app.classpool.api.repository.HouseholdRepository;
+import app.classpool.api.repository.MembershipRepository;
 import app.classpool.api.repository.OrganizerStripeAccountRepository;
 import app.classpool.api.repository.PaymentRepository;
 import app.classpool.api.repository.PurchasePlanLineRepository;
@@ -75,8 +78,10 @@ public class PaymentService {
     private final StudentRepository studentRepository;
     private final HouseholdRepository householdRepository;
     private final AppUserRepository appUserRepository;
+    private final MembershipRepository membershipRepository;
     private final StripeGateway stripeGateway;
     private final PoolService poolService;
+    private final NotificationService notificationService;
 
     public PaymentService(OrganizerStripeAccountRepository organizerStripeAccountRepository,
                            PaymentRepository paymentRepository, PurchasePlanRepository purchasePlanRepository,
@@ -85,7 +90,8 @@ public class PaymentService {
                            AllocationLineRepository allocationLineRepository,
                            RequirementRepository requirementRepository, StudentRepository studentRepository,
                            HouseholdRepository householdRepository, AppUserRepository appUserRepository,
-                           StripeGateway stripeGateway, PoolService poolService) {
+                           MembershipRepository membershipRepository, StripeGateway stripeGateway,
+                           PoolService poolService, NotificationService notificationService) {
         this.organizerStripeAccountRepository = organizerStripeAccountRepository;
         this.paymentRepository = paymentRepository;
         this.purchasePlanRepository = purchasePlanRepository;
@@ -96,8 +102,10 @@ public class PaymentService {
         this.studentRepository = studentRepository;
         this.householdRepository = householdRepository;
         this.appUserRepository = appUserRepository;
+        this.membershipRepository = membershipRepository;
         this.stripeGateway = stripeGateway;
         this.poolService = poolService;
+        this.notificationService = notificationService;
     }
 
     // ==================== Stripe onboarding ====================
@@ -199,10 +207,36 @@ public class PaymentService {
                 .toList();
         paymentRepository.saveAll(payments);
         poolService.transitionToPaymentOpen(pool);
+        notifyHouseholdsOfPaymentDue(pool, payments);
 
         Map<UUID, String> displayNames = householdDisplayNames(
                 payments.stream().map(Payment::getHouseholdId).distinct().toList());
         return payments.stream().map(p -> toResponse(p, displayNames.get(p.getHouseholdId()))).toList();
+    }
+
+    /**
+     * Phase 12 (PRD §11.3): one {@link NotificationType#PAYMENT_DUE} notification per parent in
+     * each household that just got a {@link Payment} row — a household can have more than one
+     * parent/co-parent, so this resolves every {@code Membership} on the pool's classroom whose
+     * student belongs to that household (see {@code MembershipRepository
+     * .findByClassroom_IdAndStudent_HouseholdId}'s Javadoc), not just the household's
+     * {@code primaryParentId}.
+     */
+    private void notifyHouseholdsOfPaymentDue(Pool pool, List<Payment> payments) {
+        for (Payment payment : payments) {
+            String message = "You owe " + formatCents(payment.getAmountCents()) + " for " + pool.getName() + ".";
+            membershipRepository.findByClassroom_IdAndStudent_HouseholdId(pool.getClassroomId(),
+                            payment.getHouseholdId())
+                    .stream()
+                    .map(Membership::getParentUserId)
+                    .distinct()
+                    .forEach(userId -> notificationService.notify(userId, NotificationType.PAYMENT_DUE, pool.getId(),
+                            message));
+        }
+    }
+
+    private static String formatCents(int cents) {
+        return String.format("$%.2f", cents / 100.0);
     }
 
     /**

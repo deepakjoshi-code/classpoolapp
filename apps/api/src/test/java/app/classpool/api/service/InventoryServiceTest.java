@@ -47,6 +47,8 @@ class InventoryServiceTest {
     @Mock
     private MembershipRepository membershipRepository;
     @Mock
+    private NotificationService notificationService;
+    @Mock
     private PoolRepository poolRepository;
 
     private InventoryService inventoryService;
@@ -61,7 +63,7 @@ class InventoryServiceTest {
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
         RequirementAssembler requirementAssembler = new RequirementAssembler();
         PoolService poolService = new PoolService(poolRepository, requirementRepository, membershipRepository,
-                poolAssembler, requirementAssembler);
+                poolAssembler, requirementAssembler, notificationService);
         inventoryService = new InventoryService(parentInventoryRepository, requirementRepository,
                 membershipRepository, poolService, requirementAssembler);
     }

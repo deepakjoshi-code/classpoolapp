@@ -1,5 +1,9 @@
 package app.classpool.api.service;
 
+import app.classpool.api.domain.Classroom;
+import app.classpool.api.domain.Membership;
+import app.classpool.api.domain.MembershipRole;
+import app.classpool.api.domain.NotificationType;
 import app.classpool.api.domain.Pool;
 import app.classpool.api.domain.PoolState;
 import app.classpool.api.domain.Requirement;
@@ -29,6 +33,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -40,6 +46,8 @@ class PoolServiceTest {
     private RequirementRepository requirementRepository;
     @Mock
     private MembershipRepository membershipRepository;
+    @Mock
+    private NotificationService notificationService;
 
     private PoolService poolService;
 
@@ -54,7 +62,7 @@ class PoolServiceTest {
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
         RequirementAssembler requirementAssembler = new RequirementAssembler();
         poolService = new PoolService(poolRepository, requirementRepository, membershipRepository, poolAssembler,
-                requirementAssembler);
+                requirementAssembler, notificationService);
         lenient().when(requirementRepository.countByPoolIdIn(anyList())).thenReturn(List.of());
     }
 
@@ -188,11 +196,50 @@ class PoolServiceTest {
         when(membershipRepository.hasOrganizerRole(classroomId, callerId)).thenReturn(true);
         when(requirementRepository.findByPoolIdOrderByCreatedAtAsc(pool.getId())).thenReturn(List.of());
         when(poolRepository.save(any(Pool.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(membershipRepository.findByClassroom_IdAndStudentIsNotNullOrderByCreatedAtAsc(classroomId))
+                .thenReturn(List.of());
 
         PoolDetailResponse response = poolService.complete(callerId, pool.getId());
 
         assertThat(pool.getState()).isEqualTo(PoolState.COMPLETED);
         assertThat(response.state()).isEqualTo("COMPLETED");
+    }
+
+    /**
+     * Phase 12: {@code complete} still transitions/returns exactly as above, and now additionally
+     * emits one {@code POOL_COMPLETED} notification per distinct parent with a
+     * participating-student Membership on the classroom — every household in the class, not just
+     * ones that owed a purchase payment (no {@code Payment}/allocation data is even read here).
+     */
+    @Test
+    void complete_notifiesEveryDistinctParentOnTheClassroom() {
+        Pool pool = newPool(classroomId, PoolState.DISTRIBUTING);
+        when(poolRepository.findById(pool.getId())).thenReturn(Optional.of(pool));
+        when(membershipRepository.hasOrganizerRole(classroomId, callerId)).thenReturn(true);
+        when(requirementRepository.findByPoolIdOrderByCreatedAtAsc(pool.getId())).thenReturn(List.of());
+        when(poolRepository.save(any(Pool.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        UUID parent1 = UUID.randomUUID();
+        UUID parent2 = UUID.randomUUID();
+        // parent1 has two Memberships (e.g. two kids in the class) — must be notified only once.
+        when(membershipRepository.findByClassroom_IdAndStudentIsNotNullOrderByCreatedAtAsc(classroomId))
+                .thenReturn(List.of(newMembership(parent1), newMembership(parent1), newMembership(parent2)));
+
+        poolService.complete(callerId, pool.getId());
+
+        verify(notificationService, times(1)).notify(eq(parent1), eq(NotificationType.POOL_COMPLETED),
+                eq(pool.getId()), contains("Fall Supplies"));
+        verify(notificationService, times(1)).notify(eq(parent2), eq(NotificationType.POOL_COMPLETED),
+                eq(pool.getId()), contains("Fall Supplies"));
+    }
+
+    private Membership newMembership(UUID parentUserId) {
+        Classroom classroom = new Classroom(UUID.randomUUID(), "Grade 1", "Ms. Smith", null, null);
+        setId(classroom, classroomId);
+        Membership membership = new Membership(classroom, parentUserId, null, MembershipRole.PARENT, false);
+        setId(membership, UUID.randomUUID());
+        setCreatedAt(membership);
+        return membership;
     }
 
     private static Pool newPool(UUID classroomId, PoolState state) {

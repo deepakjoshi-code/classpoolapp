@@ -60,6 +60,8 @@ class OrderServiceTest {
     @Mock
     private MembershipRepository membershipRepository;
     @Mock
+    private NotificationService notificationService;
+    @Mock
     private PoolRepository poolRepository;
 
     private OrderService orderService;
@@ -74,7 +76,7 @@ class OrderServiceTest {
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
         RequirementAssembler requirementAssembler = new RequirementAssembler();
         PoolService poolService = new PoolService(poolRepository, requirementRepository, membershipRepository,
-                poolAssembler, requirementAssembler);
+                poolAssembler, requirementAssembler, notificationService);
         orderService = new OrderService(orderRepository, orderLineRepository, purchasePlanRepository,
                 purchasePlanLineRepository, requirementRepository, paymentService, poolService);
     }

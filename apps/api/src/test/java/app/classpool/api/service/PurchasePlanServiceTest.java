@@ -58,6 +58,8 @@ class PurchasePlanServiceTest {
     @Mock
     private MembershipRepository membershipRepository;
     @Mock
+    private NotificationService notificationService;
+    @Mock
     private PoolRepository poolRepository;
 
     private PurchasePlanService purchasePlanService;
@@ -70,7 +72,7 @@ class PurchasePlanServiceTest {
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
         RequirementAssembler requirementAssembler = new RequirementAssembler();
         PoolService poolService = new PoolService(poolRepository, requirementRepository, membershipRepository,
-                poolAssembler, requirementAssembler);
+                poolAssembler, requirementAssembler, notificationService);
         purchasePlanService = new PurchasePlanService(productOfferRepository, purchasePlanRepository,
                 purchasePlanLineRepository, requirementRepository, residualDemandLineRepository, poolService);
     }

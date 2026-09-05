@@ -39,6 +39,16 @@ public interface MembershipRepository extends JpaRepository<Membership, UUID> {
     @EntityGraph(attributePaths = {"student"})
     List<Membership> findByClassroom_IdAndStudentIsNotNullOrderByCreatedAtAsc(UUID classroomId);
 
+    /**
+     * Every Membership on this classroom whose student belongs to a given household (PRD §11.3's
+     * notification fan-out — a household can have more than one parent/co-parent, each with their
+     * own Membership row pointing at the same or a different student in that household). Used by
+     * {@code PaymentService.generatePayments}/{@code DistributionService.generateDistribution} to
+     * resolve "every parent in this household" scoped to one classroom, rather than every parent
+     * across every classroom the household happens to touch.
+     */
+    List<Membership> findByClassroom_IdAndStudent_HouseholdId(UUID classroomId, UUID householdId);
+
     long countByClassroom_Id(UUID classroomId);
 
     boolean existsByClassroom_IdAndParentUserIdAndRoleIn(UUID classroomId, UUID parentUserId,

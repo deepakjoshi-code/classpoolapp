@@ -9,6 +9,7 @@ import app.classpool.api.domain.DistributionItem;
 import app.classpool.api.domain.DistributionMode;
 import app.classpool.api.domain.Membership;
 import app.classpool.api.domain.MembershipRole;
+import app.classpool.api.domain.NotificationType;
 import app.classpool.api.domain.Pool;
 import app.classpool.api.domain.PoolState;
 import app.classpool.api.domain.PurchasePlan;
@@ -52,6 +53,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -88,6 +91,8 @@ class DistributionServiceTest {
     private AppUserRepository appUserRepository;
     @Mock
     private PoolRepository poolRepository;
+    @Mock
+    private NotificationService notificationService;
 
     private DistributionService distributionService;
 
@@ -99,11 +104,11 @@ class DistributionServiceTest {
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
         RequirementAssembler requirementAssembler = new RequirementAssembler();
         PoolService poolService = new PoolService(poolRepository, requirementRepository, membershipRepository,
-                poolAssembler, requirementAssembler);
+                poolAssembler, requirementAssembler, notificationService);
         distributionService = new DistributionService(distributionBatchRepository, distributionItemRepository,
                 classReserveEntryRepository, orderRepository, purchasePlanRepository, purchasePlanLineRepository,
                 allocationLineRepository, requirementRepository, studentRepository, membershipRepository,
-                householdRepository, appUserRepository, poolService);
+                householdRepository, appUserRepository, poolService, notificationService);
     }
 
     // ---- generateDistribution: gates ----
@@ -240,6 +245,65 @@ class DistributionServiceTest {
         assertThat(entry.getItemName()).isEqualTo("Pencils");
         assertThat(entry.getQuantity()).isEqualTo(16);
         assertThat(entry.getCustodianLocation()).isNull(); // V1 gap — never set
+    }
+
+    /**
+     * Phase 12: {@code generateDistribution} still creates exactly the same items it did before
+     * (the self-fulfilled line skipped, the needs-handoff line included — same rule the test
+     * above covers), and now additionally emits one {@code BUNDLE_READY} notification per parent
+     * in every household that has at least one item in the new batch — never for a fully
+     * self-fulfilled household, which gets no item at all.
+     */
+    @Test
+    void generateDistribution_notifiesEveryParentInHouseholdsWithAtLeastOneItem() {
+        Pool pool = newPool(PoolState.ORDERED);
+        Requirement pencils = newRequirement(pool.getId(), "Pencils");
+        stubOrganizer(pool);
+        when(orderRepository.existsByPoolId(pool.getId())).thenReturn(true);
+        when(distributionBatchRepository.existsByPoolId(pool.getId())).thenReturn(false);
+        when(requirementRepository.findByPoolIdOrderByCreatedAtAsc(pool.getId())).thenReturn(List.of(pencils));
+
+        UUID householdSelfFulfilled = UUID.randomUUID();
+        UUID householdNeedsHandoff = UUID.randomUUID();
+        Student selfFulfilledStudent = newStudent(householdSelfFulfilled, "Self");
+        Student needsHandoffStudent = newStudent(householdNeedsHandoff, "Needs");
+
+        when(allocationLineRepository.findByRequirementIdInOrderByRequirementIdAscStudentIdAsc(
+                List.of(pencils.getId())))
+                .thenReturn(List.of(
+                        new AllocationLine(pencils.getId(), selfFulfilledStudent.getId(), 4, 4, 0, 0,
+                                AllocationStatus.SELF_FULFILLED),
+                        new AllocationLine(pencils.getId(), needsHandoffStudent.getId(), 4, 0, 1, 3,
+                                AllocationStatus.PURCHASE_REQUIRED)));
+        when(purchasePlanRepository.findByPoolId(pool.getId())).thenReturn(Optional.empty());
+        when(studentRepository.findAllById(List.of(needsHandoffStudent.getId())))
+                .thenReturn(List.of(needsHandoffStudent));
+
+        when(distributionBatchRepository.save(any(DistributionBatch.class))).thenAnswer(inv -> {
+            DistributionBatch batch = inv.getArgument(0);
+            setField(batch, "id", UUID.randomUUID());
+            setField(batch, "createdAt", Instant.now());
+            return batch;
+        });
+        when(distributionItemRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(distributionItemRepository.findByDistributionBatchIdOrderByRequirementIdAscStudentIdAsc(any()))
+                .thenReturn(List.of());
+
+        UUID parent1 = UUID.randomUUID();
+        UUID parent2 = UUID.randomUUID();
+        when(membershipRepository.findByClassroom_IdAndStudent_HouseholdId(classroomId, householdNeedsHandoff))
+                .thenReturn(List.of(newMembershipForParent(parent1), newMembershipForParent(parent2)));
+
+        distributionService.generateDistribution(callerId, pool.getId(),
+                new GenerateDistributionRequest("CLASSROOM_DESK"));
+
+        verify(notificationService).notify(eq(parent1), eq(NotificationType.BUNDLE_READY), eq(pool.getId()),
+                contains("Fall Supplies"));
+        verify(notificationService).notify(eq(parent2), eq(NotificationType.BUNDLE_READY), eq(pool.getId()),
+                contains("Fall Supplies"));
+        // The fully self-fulfilled household got no item, so it's never even looked up.
+        verify(membershipRepository, never())
+                .findByClassroom_IdAndStudent_HouseholdId(classroomId, householdSelfFulfilled);
     }
 
     // ---- getDistribution ----
@@ -443,6 +507,15 @@ class DistributionServiceTest {
         Classroom classroom = new Classroom(UUID.randomUUID(), "Grade 1", "Ms. Smith", null, null);
         setField(classroom, "id", classroomId);
         Membership membership = new Membership(classroom, callerId, student, MembershipRole.PARENT, false);
+        setField(membership, "id", UUID.randomUUID());
+        setField(membership, "createdAt", Instant.now());
+        return membership;
+    }
+
+    private Membership newMembershipForParent(UUID parentUserId) {
+        Classroom classroom = new Classroom(UUID.randomUUID(), "Grade 1", "Ms. Smith", null, null);
+        setField(classroom, "id", classroomId);
+        Membership membership = new Membership(classroom, parentUserId, null, MembershipRole.PARENT, false);
         setField(membership, "id", UUID.randomUUID());
         setField(membership, "createdAt", Instant.now());
         return membership;

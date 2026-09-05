@@ -7,6 +7,8 @@ import app.classpool.api.domain.DistributionBatch;
 import app.classpool.api.domain.DistributionItem;
 import app.classpool.api.domain.DistributionMode;
 import app.classpool.api.domain.Household;
+import app.classpool.api.domain.Membership;
+import app.classpool.api.domain.NotificationType;
 import app.classpool.api.domain.Pool;
 import app.classpool.api.domain.PoolState;
 import app.classpool.api.domain.PurchasePlanLine;
@@ -38,8 +40,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -68,6 +73,7 @@ public class DistributionService {
     private final HouseholdRepository householdRepository;
     private final AppUserRepository appUserRepository;
     private final PoolService poolService;
+    private final NotificationService notificationService;
 
     public DistributionService(DistributionBatchRepository distributionBatchRepository,
                                 DistributionItemRepository distributionItemRepository,
@@ -77,7 +83,8 @@ public class DistributionService {
                                 AllocationLineRepository allocationLineRepository,
                                 RequirementRepository requirementRepository, StudentRepository studentRepository,
                                 MembershipRepository membershipRepository, HouseholdRepository householdRepository,
-                                AppUserRepository appUserRepository, PoolService poolService) {
+                                AppUserRepository appUserRepository, PoolService poolService,
+                                NotificationService notificationService) {
         this.distributionBatchRepository = distributionBatchRepository;
         this.distributionItemRepository = distributionItemRepository;
         this.classReserveEntryRepository = classReserveEntryRepository;
@@ -91,6 +98,7 @@ public class DistributionService {
         this.householdRepository = householdRepository;
         this.appUserRepository = appUserRepository;
         this.poolService = poolService;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -127,6 +135,7 @@ public class DistributionService {
         Map<UUID, Requirement> requirementsById = requirements.stream()
                 .collect(Collectors.toMap(Requirement::getId, r -> r));
 
+        List<DistributionItem> savedItems = List.of();
         if (!requirementIds.isEmpty()) {
             List<AllocationLine> allocationLines = allocationLineRepository
                     .findByRequirementIdInOrderByRequirementIdAscStudentIdAsc(requirementIds);
@@ -136,6 +145,7 @@ public class DistributionService {
                             l.getPoolFulfilledQuantity() + l.getPurchaseRequiredQuantity()))
                     .toList();
             distributionItemRepository.saveAll(items);
+            savedItems = items;
         }
 
         purchasePlanRepository.findByPoolId(poolId).ifPresent(plan -> {
@@ -150,7 +160,39 @@ public class DistributionService {
         });
 
         poolService.transitionToDistributing(pool);
+        notifyHouseholdsOfBundleReady(pool, savedItems);
         return buildSummary(batch);
+    }
+
+    /**
+     * Phase 12 (PRD §11.3): one {@link NotificationType#BUNDLE_READY} notification per parent in
+     * each distinct household that has at least one {@link DistributionItem} in this new batch —
+     * a household with every line {@code SELF_FULFILLED} (skipped above, nothing to hand off) gets
+     * none. Resolves "every parent in the household" the same
+     * {@code MembershipRepository.findByClassroom_IdAndStudent_HouseholdId} way {@code
+     * PaymentService.notifyHouseholdsOfPaymentDue} does.
+     */
+    private void notifyHouseholdsOfBundleReady(Pool pool, List<DistributionItem> items) {
+        if (items.isEmpty()) {
+            return;
+        }
+        Map<UUID, UUID> householdByStudent = studentRepository
+                .findAllById(items.stream().map(DistributionItem::getStudentId).distinct().toList()).stream()
+                .collect(Collectors.toMap(Student::getId, Student::getHouseholdId));
+        Set<UUID> householdIds = items.stream()
+                .map(item -> householdByStudent.get(item.getStudentId()))
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        String message = "Your items for " + pool.getName() + " are ready — check the pick list.";
+        for (UUID householdId : householdIds) {
+            membershipRepository.findByClassroom_IdAndStudent_HouseholdId(pool.getClassroomId(), householdId)
+                    .stream()
+                    .map(Membership::getParentUserId)
+                    .distinct()
+                    .forEach(userId -> notificationService.notify(userId, NotificationType.BUNDLE_READY,
+                            pool.getId(), message));
+        }
     }
 
     /**

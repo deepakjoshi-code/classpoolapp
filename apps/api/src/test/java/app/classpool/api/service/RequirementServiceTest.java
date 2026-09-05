@@ -39,6 +39,8 @@ class RequirementServiceTest {
     private PoolRepository poolRepository;
     @Mock
     private MembershipRepository membershipRepository;
+    @Mock
+    private NotificationService notificationService;
 
     private RequirementService requirementService;
 
@@ -52,7 +54,7 @@ class RequirementServiceTest {
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
         RequirementAssembler requirementAssembler = new RequirementAssembler();
         PoolService poolService = new PoolService(poolRepository, requirementRepository, membershipRepository,
-                poolAssembler, requirementAssembler);
+                poolAssembler, requirementAssembler, notificationService);
         requirementService = new RequirementService(requirementRepository, poolService, requirementAssembler);
     }
 

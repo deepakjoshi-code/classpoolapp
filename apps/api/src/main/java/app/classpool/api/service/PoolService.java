@@ -1,5 +1,7 @@
 package app.classpool.api.service;
 
+import app.classpool.api.domain.Membership;
+import app.classpool.api.domain.NotificationType;
 import app.classpool.api.domain.Pool;
 import app.classpool.api.domain.PoolState;
 import app.classpool.api.domain.Requirement;
@@ -28,15 +30,17 @@ public class PoolService {
     private final MembershipRepository membershipRepository;
     private final PoolAssembler poolAssembler;
     private final RequirementAssembler requirementAssembler;
+    private final NotificationService notificationService;
 
     public PoolService(PoolRepository poolRepository, RequirementRepository requirementRepository,
                         MembershipRepository membershipRepository, PoolAssembler poolAssembler,
-                        RequirementAssembler requirementAssembler) {
+                        RequirementAssembler requirementAssembler, NotificationService notificationService) {
         this.poolRepository = poolRepository;
         this.requirementRepository = requirementRepository;
         this.membershipRepository = membershipRepository;
         this.poolAssembler = poolAssembler;
         this.requirementAssembler = requirementAssembler;
+        this.notificationService = notificationService;
     }
 
     /** Organizer/co-organizer only (contract) — starts the pool in DRAFT (PRD §13.3). */
@@ -185,7 +189,24 @@ public class PoolService {
         }
         pool.setState(PoolState.COMPLETED);
         poolRepository.save(pool);
+        notifyClassParentsOfCompletion(pool);
         return toDetail(pool);
+    }
+
+    /**
+     * Phase 12 (PRD §11.3): one {@link NotificationType#POOL_COMPLETED} notification per distinct
+     * parent with a participating-student {@code Membership} on this pool's classroom — every
+     * household in the class, not just households that owed a purchase payment. Reuses the exact
+     * same query {@code AllocationService.reconcile} already relies on for "every participating
+     * student's parent on this classroom."
+     */
+    private void notifyClassParentsOfCompletion(Pool pool) {
+        String message = pool.getName() + " is complete! Thanks for being part of it.";
+        membershipRepository.findByClassroom_IdAndStudentIsNotNullOrderByCreatedAtAsc(pool.getClassroomId()).stream()
+                .map(Membership::getParentUserId)
+                .distinct()
+                .forEach(userId -> notificationService.notify(userId, NotificationType.POOL_COMPLETED, pool.getId(),
+                        message));
     }
 
     /** Package-visible so {@code PaymentService.finalizePayments} can build the {@code

@@ -44,6 +44,8 @@ class RequirementImportServiceTest {
     @Mock
     private MembershipRepository membershipRepository;
     @Mock
+    private NotificationService notificationService;
+    @Mock
     private AiExtractionGateway aiExtractionGateway;
 
     private RequirementImportService requirementImportService;
@@ -58,7 +60,7 @@ class RequirementImportServiceTest {
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
         RequirementAssembler requirementAssembler = new RequirementAssembler();
         PoolService poolService = new PoolService(poolRepository, requirementRepository, membershipRepository,
-                poolAssembler, requirementAssembler);
+                poolAssembler, requirementAssembler, notificationService);
         requirementImportService = new RequirementImportService(requirementSourceRepository, requirementRepository,
                 poolService, aiExtractionGateway, requirementAssembler);
     }

@@ -2,7 +2,11 @@ package app.classpool.api.service;
 
 import app.classpool.api.domain.AllocationLine;
 import app.classpool.api.domain.AllocationStatus;
+import app.classpool.api.domain.Classroom;
 import app.classpool.api.domain.Household;
+import app.classpool.api.domain.Membership;
+import app.classpool.api.domain.MembershipRole;
+import app.classpool.api.domain.NotificationType;
 import app.classpool.api.domain.OrganizerStripeAccount;
 import app.classpool.api.domain.OrganizerStripeAccountStatus;
 import app.classpool.api.domain.Payment;
@@ -56,6 +60,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -94,6 +100,8 @@ class PaymentServiceTest {
     private MembershipRepository membershipRepository;
     @Mock
     private PoolRepository poolRepository;
+    @Mock
+    private NotificationService notificationService;
 
     private PaymentService paymentService;
 
@@ -105,11 +113,11 @@ class PaymentServiceTest {
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
         RequirementAssembler requirementAssembler = new RequirementAssembler();
         PoolService poolService = new PoolService(poolRepository, requirementRepository, membershipRepository,
-                poolAssembler, requirementAssembler);
+                poolAssembler, requirementAssembler, notificationService);
         paymentService = new PaymentService(organizerStripeAccountRepository, paymentRepository,
                 purchasePlanRepository, purchasePlanLineRepository, residualDemandLineRepository,
                 allocationLineRepository, requirementRepository, studentRepository, householdRepository,
-                appUserRepository, stripeGateway, poolService);
+                appUserRepository, membershipRepository, stripeGateway, poolService, notificationService);
     }
 
     // ==================== Stripe onboarding ====================
@@ -283,6 +291,64 @@ class PaymentServiceTest {
         assertThat(responses).allSatisfy(r -> assertThat(r.method()).isNull()); // PENDING suppresses the placeholder
         // Pool moved PURCHASE_PROPOSED -> PAYMENT_OPEN.
         assertThat(pool.getState()).isEqualTo(PoolState.PAYMENT_OPEN);
+    }
+
+    /**
+     * Phase 12: {@code generatePayments} still returns/persists exactly what it did before
+     * (asserted below), and now additionally emits one {@code PAYMENT_DUE} notification per
+     * parent in the paying household — a co-parent household gets two, not one, since {@code
+     * MembershipRepository.findByClassroom_IdAndStudent_HouseholdId} can return more than one
+     * Membership row for the same household.
+     */
+    @Test
+    void generatePayments_notifiesEveryParentInEachPayingHousehold() {
+        Pool pool = newPool(PoolState.PURCHASE_PROPOSED);
+        Requirement pencils = newRequirement(pool.getId(), "Pencils");
+        stubOrganizer(pool);
+
+        PurchasePlan plan = new PurchasePlan(pool.getId());
+        setField(plan, "id", UUID.randomUUID());
+        plan.approve();
+        when(purchasePlanRepository.findByPoolId(pool.getId())).thenReturn(Optional.of(plan));
+        when(organizerStripeAccountRepository.existsByClassroomIdAndStatus(classroomId,
+                OrganizerStripeAccountStatus.ACTIVE)).thenReturn(true);
+        when(paymentRepository.existsByPoolId(pool.getId())).thenReturn(false);
+
+        when(requirementRepository.findByPoolIdOrderByCreatedAtAsc(pool.getId())).thenReturn(List.of(pencils));
+        when(residualDemandLineRepository.findByRequirementIdInOrderByRequirementIdAsc(List.of(pencils.getId())))
+                .thenReturn(List.of(new ResidualDemandLine(pencils.getId(), 4, 0, 0, 4)));
+        UUID offerId = UUID.randomUUID();
+        when(purchasePlanLineRepository.findByPurchasePlanIdOrderByRequirementIdAscProductOfferIdAsc(plan.getId()))
+                .thenReturn(List.of(new PurchasePlanLine(plan.getId(), pencils.getId(), offerId, 1, 400, 0)));
+
+        UUID studentA = UUID.randomUUID();
+        UUID householdId = UUID.randomUUID();
+        Student studentAEntity = newStudent(householdId);
+        setField(studentAEntity, "id", studentA);
+        when(allocationLineRepository.findByRequirementIdInOrderByRequirementIdAscStudentIdAsc(
+                List.of(pencils.getId())))
+                .thenReturn(List.of(
+                        new AllocationLine(pencils.getId(), studentA, 4, 0, 0, 4, AllocationStatus.PURCHASE_REQUIRED)));
+        when(studentRepository.findAllById(any())).thenReturn(List.of(studentAEntity));
+
+        when(paymentRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(householdRepository.findAllById(any())).thenReturn(List.of());
+
+        UUID parent1 = UUID.randomUUID();
+        UUID parent2 = UUID.randomUUID();
+        when(membershipRepository.findByClassroom_IdAndStudent_HouseholdId(classroomId, householdId))
+                .thenReturn(List.of(newMembership(parent1), newMembership(parent2)));
+
+        List<PaymentResponse> responses = paymentService.generatePayments(callerId, pool.getId());
+
+        // Unchanged behavior: still exactly one payment for the household, unitCost = round(400/4) = 100.
+        assertThat(responses).hasSize(1);
+        assertThat(responses.get(0).amountCents()).isEqualTo(400);
+
+        verify(notificationService).notify(eq(parent1), eq(NotificationType.PAYMENT_DUE), eq(pool.getId()),
+                contains("$4.00"));
+        verify(notificationService).notify(eq(parent2), eq(NotificationType.PAYMENT_DUE), eq(pool.getId()),
+                contains("$4.00"));
     }
 
     @Test
@@ -749,6 +815,15 @@ class PaymentServiceTest {
         setField(household, "id", UUID.randomUUID());
         setField(household, "createdAt", Instant.now());
         return household;
+    }
+
+    private Membership newMembership(UUID parentUserId) {
+        Classroom classroom = new Classroom(UUID.randomUUID(), "Grade 1", "Ms. Smith", null, null);
+        setField(classroom, "id", classroomId);
+        Membership membership = new Membership(classroom, parentUserId, null, MembershipRole.PARENT, false);
+        setField(membership, "id", UUID.randomUUID());
+        setField(membership, "createdAt", Instant.now());
+        return membership;
     }
 
     private static Payment newPayment(UUID poolId, UUID householdId, int amountCents) {

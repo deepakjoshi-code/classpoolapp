@@ -50,6 +50,8 @@ class ContributionServiceTest {
     @Mock
     private MembershipRepository membershipRepository;
     @Mock
+    private NotificationService notificationService;
+    @Mock
     private AppUserRepository appUserRepository;
     @Mock
     private PoolRepository poolRepository;
@@ -66,7 +68,7 @@ class ContributionServiceTest {
         PoolAssembler poolAssembler = new PoolAssembler(requirementRepository);
         RequirementAssembler requirementAssembler = new RequirementAssembler();
         PoolService poolService = new PoolService(poolRepository, requirementRepository, membershipRepository,
-                poolAssembler, requirementAssembler);
+                poolAssembler, requirementAssembler, notificationService);
         contributionService = new ContributionService(contributionRepository, requirementRepository,
                 membershipRepository, appUserRepository, poolService);
     }
