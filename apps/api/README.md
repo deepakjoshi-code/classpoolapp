@@ -1,9 +1,9 @@
 # ClassPool API
 
 Spring Boot 3 / Java 21 backend implementing `contracts/openapi.yaml`'s Phase 1 (PWA shell + auth),
-Phase 2 (schools/classes/memberships), and Phase 3 (pools + manual requirements, no AI yet)
-surface — see `ARCHITECTURE.md` §4 and `docs/PRD.md` §17.3 for the build-order this corresponds
-to.
+Phase 2 (schools/classes/memberships), Phase 3 (pools + manual requirements, no AI yet), and
+Phase 4 (household inventory — "Shop Your Home First") surface — see `ARCHITECTURE.md` §4 and
+`docs/PRD.md` §17.3 for the build-order this corresponds to.
 
 ## Running locally
 
@@ -217,16 +217,74 @@ classroom (via `PoolRepository`/`PoolAssembler`), so every endpoint that seriali
 `GET/POST /classrooms/{id}`, `GET /household/dashboard` via `MembershipAssembler` — gets the pools
 summary for free, with no per-endpoint pool-fetching logic to duplicate or drift.
 
+## Household inventory (Phase 4) design notes
+
+New surface: `GET /pools/{poolId}/inventory`, `PUT
+/pools/{poolId}/requirements/{requirementId}/inventory`, `GET /pools/{poolId}/inventory/summary` —
+all three routes added to the existing `PoolController` (they're all pool-scoped, same as
+`/pools/{poolId}/confirm`), delegating to a new `InventoryService`. Backed by a new
+`ParentInventory` entity/`ParentInventoryRepository` over the V1 migration's already-present
+`parent_inventory` table — no schema changes were needed for this phase.
+
+**Only `owned_quantity` is touched.** `parent_inventory.surplus_offered_quantity` and `.condition`
+are Phase 5 (surplus/reuse marketplace) columns; `ParentInventory` doesn't map them at all, so they
+simply take their DB defaults (`0` and `null`) on every insert this phase makes. A later phase's
+entity can add them without touching anything written here.
+
+**Cross join for multi-student households.** `GET /pools/{poolId}/inventory`'s contract line "one
+line per (requirement, student they have in this classroom)" is read literally: for a caller with
+two students in the same classroom (twins), the response is `|requirements| x 2` lines, not one.
+`InventoryService.getMyInventory` builds this as an actual in-memory cross join — the pool's
+requirements (already a handful of rows per pool) times the caller's own `Membership` rows with a
+non-null student on that classroom — rather than a single denormalized SQL join, since the
+"student belongs to caller" filter is naturally expressed via `MembershipRepository` (the same
+table every other tenant-isolation check already goes through) and the requirement/inventory row
+counts here are small enough that doing the join in Java costs nothing measurable. Any
+(requirement, student) pair with no `ParentInventory` row yet defaults to `ownedQuantity: 0` (a
+parent shouldn't have to explicitly zero something out) rather than being omitted.
+
+**Upsert key vs. "who wrote it".** The DB-unique key is `(requirement_id, student_id)`, not
+`parent_user_id` — `ParentInventory.applyOwnedQuantity` refreshes `parentUserId` to whichever
+caller most recently wrote the row on every PUT. This doesn't matter yet (only the student's own
+Membership-holder can write it this phase — see below), but keeps the column meaningful once a
+later phase lets more than one household member (e.g. two co-parents, each with their own
+Membership grant on the same student) record against the same row.
+
+**Authorization is per-student, not per-classroom.** Every other Phase 1-3 write checks "does the
+caller have *any* Membership on this classroom" (`PoolService.requireMembership`/
+`requireOrganizer`). Setting inventory needs a narrower check — `MembershipRepository
+.findByClassroom_IdAndParentUserIdAndStudent_Id(classroomId, callerUserId, studentId)` — matching
+the contract's "never lets one household record inventory for another's child" (PRD §14 in
+miniature, one level down from classroom to student). `GET /pools/{poolId}/inventory` still uses
+the classroom-wide membership check (any member may call it for their own household), then derives
+"own students" itself from the caller's own Membership rows.
+
+**Clamping is defense-in-depth, not just a DTO constraint.** `SetInventoryRequest.ownedQuantity`
+carries the contract's `minimum: 0` as a `@Min(0)` bean-validation annotation (consistent with
+`CreateRequirementRequest.quantityPerStudent`'s `@Min(1)`), but `InventoryService.setInventory`
+also clamps server-side to `[0, requirement.quantityPerStudent]` unconditionally — the contract
+calls the upper clamp out explicitly ("owning more than required doesn't get recorded as more"),
+and there's no bean-validation annotation that can express an upper bound that depends on another
+entity's field, so it has to live in the service regardless.
+
+**Summary reuses `RequirementAssembler`, doesn't recompute `totalDemand`.**
+`InventoryService.getSummary`'s `totalRequired` is `RequirementAssembler.toResponses(...)`'s
+`totalDemand` field, not a second computation — the two Phase 3/4 "how much is required" numbers
+can never drift apart, following the same instinct as `RequirementAssembler`'s own Javadoc about
+`totalDemand` being frozen rather than recomputed live.
+
 ## Package layout
 
 ```
 app.classpool.api
 ├── domain/       JPA entities — Phase 1-2 (AppUser, Household, Student, School, SchoolYear,
-│                 Classroom, Membership, Invite) and Phase 3 (Pool, Requirement) tables, plus enums
+│                 Classroom, Membership, Invite), Phase 3 (Pool, Requirement), and Phase 4
+│                 (ParentInventory) tables, plus enums
 ├── repository/   Spring Data JPA repositories, including the native pg_trgm dedup queries and the
 │                 shared organizer-role / confirmed-student-count queries on MembershipRepository
 ├── service/      Business logic — auth, schools, classrooms, invites, household dashboard, pools
-│                 + requirements, the Redis-backed session/magic-link stores, email boundary
+│                 + requirements, household inventory, the Redis-backed session/magic-link stores,
+│                 email boundary
 ├── security/     Cookie-based session auth filter + cookie read/write helper
 ├── config/       SecurityConfig (filter chain, public-endpoint allowlist), OAuth2Config
 ├── dto/          Request/response records matching contracts/openapi.yaml's schemas exactly
