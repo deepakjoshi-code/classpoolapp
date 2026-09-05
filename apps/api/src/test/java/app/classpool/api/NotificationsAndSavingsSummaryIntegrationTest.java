@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 /**
  * End-to-end coverage of Phase 12's notifications and savings-summary surface (PRD §11.3/§16.3):
@@ -59,10 +60,10 @@ class NotificationsAndSavingsSummaryIntegrationTest extends AbstractIntegrationT
         UUID student1Id = join(organizer, classroomId, parent1, "Alex").studentId();
         join(organizer, classroomId, parent2, "Bailey");
 
+        confirm(organizer, poolId);
+
         // Parent 1 already owns all 4 pencils at home — fully self-fulfilled, nothing to buy.
         setInventory(parent1, poolId, pencils.id(), student1Id, 4);
-
-        confirm(organizer, poolId);
 
         // Not reconciled yet -> 409.
         ResponseEntity<String> tooEarly = rest.exchange(baseUrl() + "/api/v1/pools/" + poolId + "/savings-summary",
@@ -123,9 +124,11 @@ class NotificationsAndSavingsSummaryIntegrationTest extends AbstractIntegrationT
         NotificationResponse readOnce = markNotificationRead(parent2, notification.id());
         assertThat(readOnce.readAt()).isNotNull();
 
-        // ...and calling it again is idempotent: same result, no error.
+        // ...and calling it again is idempotent: same result (modulo Postgres's microsecond
+        // timestamp precision vs. the in-memory Instant's nanosecond precision), no error.
         NotificationResponse readTwice = markNotificationRead(parent2, notification.id());
-        assertThat(readTwice.readAt()).isEqualTo(readOnce.readAt());
+        assertThat(readTwice.readAt()).isCloseTo(readOnce.readAt(),
+                within(1, java.time.temporal.ChronoUnit.MILLIS));
     }
 
     // ---- fixtures ----
