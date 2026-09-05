@@ -3,9 +3,10 @@
 Spring Boot 3 / Java 21 backend implementing `contracts/openapi.yaml`'s Phase 1 (PWA shell + auth),
 Phase 2 (schools/classes/memberships), Phase 3 (pools + manual requirements, no AI yet),
 Phase 4 (household inventory — "Shop Your Home First"), Phase 5 (surplus contribution pool),
-Phase 6/7 (allocation & residual-demand engine), Phase 8 (bulk pack optimizer / purchase plan), and
-Phase 9 (Stripe Express onboarding + per-household payment collection) surface — see
-`ARCHITECTURE.md` §4 and `docs/PRD.md` §17.3 for the build-order this corresponds to.
+Phase 6/7 (allocation & residual-demand engine), Phase 8 (bulk pack optimizer / purchase plan),
+Phase 9 (Stripe Express onboarding + per-household payment collection), and Phase 10 (ordering,
+physical distribution, and Class Reserve) surface — see `ARCHITECTURE.md` §4 and `docs/PRD.md`
+§17.3 for the build-order this corresponds to.
 
 ## Running locally
 
@@ -625,6 +626,140 @@ zero, rather than crashing or reporting a misleading 0%.
 only thing the client sends about the threshold; `meetsThreshold` is never taken from a client
 payload, so a stale or fabricated "already met" value can't bypass the gate.
 
+## Ordering and distribution (Phase 10) design notes
+
+New surface, split across two services behind one new controller: `OrderService` (`POST/GET
+/pools/{poolId}/order`) and `DistributionService` (`/pools/{poolId}/distribution*`, `GET
+/pools/{poolId}/class-reserve`) — two services because the contract's route prefixes split cleanly
+(recording a purchase vs. physically handing it out are different concerns with different
+collaborators), but one controller, `OrderDistributionController`, mirroring `PaymentController`'s
+"split service, shared controller-per-prefix-group" precedent in reverse (there it was one service
+behind two controllers; here `PoolController` was already large enough that both prefixes landed in
+one new controller instead of growing it further). `completePool` rides along on the same
+controller even though it's implemented directly on `PoolService.complete` with no order/
+distribution data of its own — it's this phase's terminal step, so it belongs with the rest of the
+phase's routes rather than back in `PoolController`. New entities `Order`/`OrderLine`/
+`DistributionBatch`/`DistributionItem`/`ClassReserveEntry` map directly onto the V1 migration's
+already-present `"order"`/`order_line`/`distribution_batch`/`distribution_item`/`class_reserve`
+tables — no new migration, except the one flagged gap below.
+
+**Flagged schema/contract gap — `OrderLine.substitutionDeltaCents`/`substitutionResolution`.** The
+contract's `OrderLine` schema has both fields, but the V1 migration's `order_line` table has no
+matching columns (only `actual_description`/`actual_cost_cents`) — the exact same shape of gap as
+Phase 9's `Payment.method` and Phase 5's Contribution `studentId`. Rather than a migration,
+`OrderService` computes both live, on every read, from `actualCostCents - <the PurchasePlanLine's
+frozen totalCostCents>` — both inputs are themselves frozen once a plan is approved/an order is
+recorded, so a live computation is exactly as stable as a persisted column would be, just never
+written to disk. See `domain/SubstitutionResolution`'s Javadoc for the detail.
+
+**A Phase 8 dependency fix, not a new gap: `PurchasePlanLineResponse` was missing `id`.** The
+contract's `PurchasePlanLine` schema explicitly documents `id` as "the value Phase 10's recordOrder
+request body references as purchasePlanLineId" — but Phase 8's original cut of
+`PurchasePlanLineResponse` predates Phase 10 and never included it (nothing before this phase
+needed to address one specific line; a plan can have more than one line per requirement, e.g. two
+distinct offers used together for the same requirement, so `requirementId` alone can't address a
+line). Added the field to the DTO and populated it from `PurchasePlanLine.getId()` in
+`PurchasePlanService.toLineResponse` — `purchase_plan_line.id` already exists as the table's
+primary key, so this is a response-DTO fix, not a schema or contract change, and every other
+consumer of that record (JSON serialization, `PurchasePlanServiceTest`) is unaffected since nothing
+constructed it positionally by field count outside that one call site.
+
+**The 10% substitution threshold is evaluated with exact integer math, not floating point.**
+`abs(delta) <= 10% of plannedCostCents` is algebraically identical to `10 * abs(delta) <=
+plannedCostCents` — multiplying both sides by 10 turns a division-and-compare into a single integer
+comparison, so there's no floating-point rounding anywhere near the boundary. The contract's own
+"<=10%" wording is inclusive: exactly-10% is `ABSORBED`, not `TOP_UP_CHARGED` —
+`OrderServiceTest.recordOrder_absorbsDelta_atExactlyTenPercentThreshold_inclusive` exercises the
+boundary directly (planned 1000, actual 1100 → delta exactly 100 → `ABSORBED`), alongside a
+just-over test (delta 101 → `TOP_UP_CHARGED`).
+
+**Top-up charges reuse Phase 9's `Payment` entity and its proportional-split math exactly — no new
+payment concept, no new frontend surface.** `PaymentService.computeHouseholdTotals` (Phase 9) was
+already doing "split a cost across households by their share of `purchaseRequiredQuantity` for one
+requirement" as one step of its own larger per-pool computation; that one step is now also exposed
+as a package-visible `PaymentService.splitAmountByPurchaseShare(requirementId, amountCents)`, and a
+second package-visible `PaymentService.createTopUpPayments(poolId, requirementId, deltaCents)` that
+also persists the resulting `Payment` rows (`state = PENDING`, same constructor Phase 9 uses
+verbatim) — `OrderService.recordOrder` calls the latter for any line whose delta crosses the
+threshold, rather than re-deriving the proportional math a second time. A household whose rounded
+share comes out to exactly 0 is omitted entirely (skip a $0 top-up, per the contract's own wording);
+as with `computeHouseholdTotals`, the sum across households need not equal the exact delta to the
+cent (the same accepted per-requirement rounding drift, verified directly in
+`PaymentServiceTest.splitAmountByPurchaseShare_splitsProportionally_withExpectedRoundingDrift`'s
+33+33+33=99-not-100 worked example) — a household then pays it through the existing
+`payMyPayment`/cash-flow surface exactly like any other `Payment` row, with zero new UI.
+
+**A judgment call the contract doesn't resolve: a large *negative* delta (a substitution that came
+in well *under* budget).** The contract's threshold math is written in terms of `abs(delta)`, which
+reads as symmetric — a delta far enough under budget would, by the letter of the rule, also be
+`TOP_UP_CHARGED`. But "top-up" only makes product sense for an overage (charging households *more*
+money); billing a household for a *negative* amount doesn't correspond to anything a household can
+pay through `payMyPayment`, and `OrderLine`'s resolution enum has no third "refund due" value to
+route an under-budget substitution to instead. Resolved here as: the response's
+`substitutionResolution` still reports `TOP_UP_CHARGED` for a large negative delta (the abs-based
+threshold math is unchanged, so a client reading the line still sees "this substitution moved by
+more than 10%"), but `OrderService.recordOrder` only actually calls `createTopUpPayments` when
+`delta > 0` — a negative-delta "top-up" never bills anyone.
+`OrderServiceTest.recordOrder_negativeDeltaBeyondThreshold_isLabeledTopUpCharged_butNeverBillsAnyone`
+exercises this directly. Flagged here as a genuine product-decision gap in the contract, not
+silently worked around; a later phase could add a real refund flow for this case if it turns out to
+matter in practice.
+
+**`generateDistribution`'s skip rule matches the contract's own algebra exactly.** One
+`DistributionItem` per `AllocationLine` where `poolFulfilledQuantity + purchaseRequiredQuantity >
+0` — a line where both are zero was fully covered by the household's own recorded inventory
+(`SELF_FULFILLED`, Phase 6/7's own status for exactly this case) and needs no physical hand-off,
+so it's the one case skipped. `DistributionServiceTest
+.generateDistribution_createsOneItemPerNonZeroLine_skippingFullySelfFulfilledLines` asserts the
+skip directly against a two-student fixture, one self-fulfilled and one not.
+
+**Class Reserve is scoped to `classroom_id`, never `school_id`, per this task's explicit
+instruction** — `class_reserve.school_id` (the stranded-reserve donate-up case, PRD §9.4/§13.1's
+later update) is left unmapped on `ClassReserveEntry`, the same "don't map what this phase doesn't
+populate" instinct as `Contribution`'s unmapped `return_due_date`/`Requirement`'s unmapped
+`requirement_source_id`. `getClassReserve` reads every entry for the classroom, not just this
+pool's own — Class Reserve is a classroom-level concept the contract describes multiple pools
+contributing to over time, even though in practice this phase is its first appearance so today
+it's always just one pool's entries.
+
+**`custodianLocation` stays `null` for every row this phase creates — a deliberate V1 gap, not a
+bug.** There is no request field anywhere in the contract's Phase 10 surface to set it (not on
+`generateDistribution`, not anywhere else) — same "flagged, not silently invented" posture as every
+other gap in this document. A later phase could add a
+`PATCH /pools/{poolId}/class-reserve/{entryId}` (or similar) to let an organizer record where the
+leftover physically lives.
+
+**The household pick-list aggregation groups by household, then sums per distinct requirement
+within it — not per `DistributionItem` row.** A two-student household (siblings in the same
+classroom) each needing 2 pencils produces two separate `DistributionItem` rows (one per student,
+matching the raw `items` array the contract also returns for marking-delivered purposes), but
+exactly one `HouseholdPickListLine` ("Pencils: 4") in that household's pick list — the printable
+"Family A: 12 pencils, 2 notebooks" artifact PRD §9.2's update describes.
+`DistributionServiceTest.getDistribution_pickLists_sumQuantityPerRequirement_acrossSiblingsInTheSameHousehold`
+and the integration test's two-single-child-household case both exercise this, from opposite ends
+(force the aggregation vs. confirm it doesn't over-aggregate across different households).
+`householdDisplayName` follows the exact same organizer-sees-identity precedent as
+`PaymentResponse`/`ContributionResponse` — populated on the organizer-only `getDistribution`, not
+applicable to `getMyDistribution` (the contract's own schema for that endpoint has no household
+wrapper at all, just the raw items).
+
+**`getMyDistribution` derives "own students" the same way every other "mine" endpoint in this
+codebase does** — the caller's own `Membership` rows on the pool's classroom with a non-null
+student, the identical pattern `AllocationService.getMyAllocation`/`InventoryService
+.getMyInventory` already established — rather than introducing a new lookup path. Empty array
+(never an error) both when generate hasn't run yet and when the household has nothing to receive.
+
+**`markDistributionItemDelivered` and `completePool` are both accepted-organizer-trust
+simplifications, matching Phase 9's own precedent.** Neither requires every line to be in any
+particular state before the other succeeds — completing a pool with undelivered items is legal in
+V1 (the contract's own summary says so explicitly), the same posture as self-reported household
+inventory (Phase 4) and the "no re-reconcile" one-shot instinct running through every phase since
+Phase 6/7. `PoolService.complete` is implemented directly there (not a separate
+`transitionToCompleted` package-visible method called from another service) since, unlike every
+other transition added by a prior phase, nothing outside `PoolService` needs to drive it — the
+organizer-check-then-state-check-then-transition shape is identical to `PoolService.confirm`'s, so
+it lives right alongside it.
+
 ## Package layout
 
 ```
@@ -632,16 +767,18 @@ app.classpool.api
 ├── domain/       JPA entities — Phase 1-2 (AppUser, Household, Student, School, SchoolYear,
 │                 Classroom, Membership, Invite), Phase 3 (Pool, Requirement), Phase 4
 │                 (ParentInventory), Phase 5 (Contribution), Phase 6/7 (AllocationLine,
-│                 ResidualDemandLine), Phase 8 (ProductOffer, PurchasePlan, PurchasePlanLine), and
-│                 Phase 9 (OrganizerStripeAccount, Payment) tables, plus enums
+│                 ResidualDemandLine), Phase 8 (ProductOffer, PurchasePlan, PurchasePlanLine),
+│                 Phase 9 (OrganizerStripeAccount, Payment), and Phase 10 (Order, OrderLine,
+│                 DistributionBatch, DistributionItem, ClassReserveEntry) tables, plus enums
 ├── repository/   Spring Data JPA repositories, including the native pg_trgm dedup queries and the
 │                 shared organizer-role / confirmed-student-count / join-order queries on
 │                 MembershipRepository
 ├── service/      Business logic — auth, schools, classrooms, invites, household dashboard, pools
 │                 + requirements, household inventory, surplus contributions, the allocation &
 │                 residual-demand engine, the bulk-pack optimizer (PurchasePlanService +
-│                 PackOptimizer), Stripe onboarding + payment collection (PaymentService), the
-│                 stubbed StripeGateway boundary, the Redis-backed session/magic-link stores, email
+│                 PackOptimizer), Stripe onboarding + payment collection (PaymentService), ordering
+│                 + physical distribution (OrderService, DistributionService), the stubbed
+│                 StripeGateway boundary, the Redis-backed session/magic-link stores, email
 │                 boundary
 ├── security/     Cookie-based session auth filter + cookie read/write helper
 ├── config/       SecurityConfig (filter chain, public-endpoint allowlist), OAuth2Config
