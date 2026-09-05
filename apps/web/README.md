@@ -10,11 +10,15 @@ needs buying" action, organizer purchase breakdown, household's own status
 view), Phase 7+8 (product-offer entry and the bulk-pack purchase plan —
 organizer candidate price options per item, "work out the cheapest way to
 buy what's left" action, the generated plan with its running total and an
-approve step), and Phase 9 (Stripe Connect payment collection — organizer
+approve step), Phase 9 (Stripe Connect payment collection — organizer
 bank-account onboarding, generating each household's payment, a household's
-own pay screen, cash fallback + refund, and the 90%-threshold finalize gate)
-of the V1 build order — see `../../ARCHITECTURE.md` §4 and
-`../../docs/PRD.md` §17.3.
+own pay screen, cash fallback + refund, and the 90%-threshold finalize gate),
+and Phase 10 (ordering & distribution — organizer records the actual order
+against the approved plan with optional per-line substitution editing,
+organizer sets up and prints per-household pick lists and tracks delivery,
+a household's own "what you're receiving" view, the class reserve ledger,
+and the final "close out this pool" step) of the V1 build order — see
+`../../ARCHITECTURE.md` §4 and `../../docs/PRD.md` §17.3.
 
 ## Running it
 
@@ -204,6 +208,45 @@ Component tests live in `src/tests/` (Vitest + React Testing Library), per
   plain language with no pay button; and — the privacy check —
   `householdDisplayName` is asserted absent from the page even when a mock
   deliberately includes it.
+- `RecordOrderAction.test.tsx` — the organizer's "record the order" action
+  (PRD §9.1): the primary confirm path POSTs `{}` (no line overrides) and
+  the resulting `Order` is passed to `onRecorded`; the secondary per-line
+  editor path types an actual cost/description for one line and asserts the
+  exact `purchasePlanLineId`/`actualCostCents`/`actualDescription` payload
+  sent; the already-recorded read view renders both an `ABSORBED` and a
+  `TOP_UP_CHARGED` line's plain-language outcome side by side and asserts
+  neither raw enum value ever appears; and a 409 on submit shows a specific
+  already-recorded message.
+- `GenerateDistributionAction.test.tsx` — the organizer's one-way "set up
+  distribution" action (PRD §9.2/§9.3): shows a specific "record the order
+  first" reason instead of a dead button when its own `GET .../order`
+  precondition check comes back 409; requires picking a mode and passing
+  through the "this can't be undone" step before `POST
+  .../distribution/generate` fires with the selected `mode`; re-checks that
+  precondition when `refreshKey` bumps (simulating `RecordOrderAction`
+  recording an order); and cancelling backs out without calling the API.
+- `DistributionPanel.test.tsx` — the organizer's distribution view (PRD
+  §9.2/§9.3): renders each household's pick list with multiple summed
+  lines; a not-generated 409 renders a message instead of crashing; the
+  per-item delivery tracker groups by student and shows "Mark delivered"
+  only on still-undelivered items; clicking it calls the deliver endpoint
+  for the right item and updates just that row with no full reload; and the
+  print button calls `window.print()`.
+- `ClassReserveCard.test.tsx` — the organizer's class reserve list (PRD
+  §9.4/§19): renders quantity/item name per entry and falls back to "not
+  yet noted" — never a raw `null` — when `custodianLocation` is null, plus
+  an empty-state message when nothing's been banked.
+- `CompletePoolAction.test.tsx` — the organizer's final one-way "close out
+  this pool" action: unreachable without first passing through the "this
+  can't be undone" step; cancelling backs out without calling the API; a
+  409 shows a specific already-complete message; and once `poolState` is
+  already `COMPLETED` it renders a warm closing message with no action
+  button at all (not just a disabled one).
+- `PoolDistributionPage.test.tsx` — a household's own "what you're
+  receiving" screen (PRD §9.3): an empty array reads as a plain "nothing to
+  show yet" message; a populated response groups items by student and
+  renders each one's plain-language delivered/not-yet-delivered status via
+  the same `distributionItemStatusLabel` helper the organizer's panel uses.
 
 ## API client — generated from the contract
 
@@ -272,10 +315,11 @@ local inventory edits" — not yet built, out of scope for Phase 1-2).
 | `/classrooms/[id]/invite` | Join link + QR + one-tap share, shown right after creation |
 | `/join/[token]` | Public, pre-auth invite landing page → sign-in → student-name join step |
 | `/classrooms/[id]/pools/new` | Organizer/co-organizer only: name a pool ("Fall Supplies") and start it in `DRAFT` |
-| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4). While the pool is `OPEN_FOR_INVENTORY`, an organizer also sees `ReconcileAction` — the one-way "work out what still needs buying" step. Once the pool has moved past that (`RECONCILING` or later), everyone sees `MyAllocationPanel` (their own household's status) and an organizer additionally sees `OrganizerAllocationPanel` (the full purchase breakdown) (Phase 6). While still `RECONCILING`, that same panel also embeds a `ProductOfferForm` per item that still needs buying, and the organizer sees `GeneratePurchasePlanAction` — the one-way "work out the cheapest way to buy what's left" step; once a plan exists (`PURCHASE_PROPOSED` or later) the organizer additionally sees `PurchasePlanPanel` (chosen retailer/pack/cost per item, running total, and an approve step) (Phase 7+8). Once a plan exists an organizer also sees `StripeOnboardingCard` (connect a bank account for this classroom); while the pool is `PURCHASE_PROPOSED` they see `GeneratePaymentsAction` — the one-way "open payment for this pool" step, gated on the plan being `APPROVED` and Stripe being `ACTIVE`; once payments exist (`PAYMENT_OPEN` or later) an organizer additionally sees `PaymentsThresholdPanel` (percent collected, the below-90% risk banner, and the finalize action) and `OrganizerPaymentsPanel` (every household's payment, with cash-fallback and refund actions), and everyone sees a link to `/pools/[id]/payment` (Phase 9) |
+| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4). While the pool is `OPEN_FOR_INVENTORY`, an organizer also sees `ReconcileAction` — the one-way "work out what still needs buying" step. Once the pool has moved past that (`RECONCILING` or later), everyone sees `MyAllocationPanel` (their own household's status) and an organizer additionally sees `OrganizerAllocationPanel` (the full purchase breakdown) (Phase 6). While still `RECONCILING`, that same panel also embeds a `ProductOfferForm` per item that still needs buying, and the organizer sees `GeneratePurchasePlanAction` — the one-way "work out the cheapest way to buy what's left" step; once a plan exists (`PURCHASE_PROPOSED` or later) the organizer additionally sees `PurchasePlanPanel` (chosen retailer/pack/cost per item, running total, and an approve step) (Phase 7+8). Once a plan exists an organizer also sees `StripeOnboardingCard` (connect a bank account for this classroom); while the pool is `PURCHASE_PROPOSED` they see `GeneratePaymentsAction` — the one-way "open payment for this pool" step, gated on the plan being `APPROVED` and Stripe being `ACTIVE`; once payments exist (`PAYMENT_OPEN` or later) an organizer additionally sees `PaymentsThresholdPanel` (percent collected, the below-90% risk banner, and the finalize action) and `OrganizerPaymentsPanel` (every household's payment, with cash-fallback and refund actions), and everyone sees a link to `/pools/[id]/payment` (Phase 9). Once the pool has entered ordering (`ORDERED` or later), an organizer additionally sees `RecordOrderAction` and `GenerateDistributionAction` while still `ORDERED`, then `DistributionPanel`, `ClassReserveCard`, and `CompletePoolAction` once distribution exists (`DISTRIBUTING` or later); everyone sees a link to `/pools/[id]/distribution` once distribution exists (Phase 10) |
 | `/pools/[id]/inventory` | "Shop Your Home First" (PRD §4) — the caller's own household inventory checklist: one +/- stepper row per (requirement, student) they have in this classroom (Phase 4) |
 | `/pools/[id]/contribute` | "Offer surplus" (PRD §5.1) — the caller's own pledge screen: one offer card per (requirement, student) they have in this classroom, showing their own pledge status and a withdraw action while still `PLEDGED`. Linked from `/pools/[id]` once the pool is past `DRAFT`, alongside (but visually secondary to, per the "optional/low-pressure" framing) the inventory link (Phase 5). The organizer's confirmation view is not a page — it's `OrganizerContributionsPanel`, embedded directly on `/pools/[id]` next to the inventory summary, same as Phase 4 |
 | `/pools/[id]/payment` | The caller's own household payment screen (PRD §8.4) — `GET /pools/{poolId}/payments/mine`. `null` reads as "nothing to pay" (not generated yet, or no residual demand); a `PENDING` payment shows the amount, the required "you're paying the class organizer, not ClassPool" disclosure, and a single "Pay with card" action (a V1 stub — see below); any other state shows plain-language status with no pay button. Linked from `/pools/[id]` once `hasPayments(pool.state)` (Phase 9) |
+| `/pools/[id]/distribution` | The caller's own household distribution screen (PRD §9.3) — `GET /pools/{poolId}/distribution/mine`. An empty array reads as "nothing to show yet" (not generated yet, or nothing to receive); a populated response groups items by student and shows each one's plain-language delivered/not-yet-delivered status. Linked from `/pools/[id]` once `hasDistribution(pool.state)` (Phase 10) |
 
 Phase 6's allocation views are all embedded directly on `/pools/[id]`, not
 separate pages — same pattern as Phase 4's `InventorySummaryPanel` and
@@ -367,6 +411,59 @@ requirement independent of whether Stripe is live. There's no organizer-name
 field anywhere in the contract (`Classroom.teacherLabel` names the teacher,
 not necessarily the organizing parent), so the disclosure uses the honest
 fallback "the class organizer" rather than inventing one.
+
+Phase 10 (ordering & distribution, PRD §9) continues the same "embed the
+organizer views on `/pools/[id]`, one dedicated page for a household's own
+view" split as every prior phase. It also reproduces (deliberately) the
+`refreshKey`/callback wiring lesson Phase 9 already had to work out:
+`RecordOrderAction` (`POST .../order`) does NOT itself change `pool.state`
+— a pool stays `ORDERED` whether or not an order has been recorded yet —
+so `GenerateDistributionAction`'s own "has an order been recorded?"
+precondition can't trust `pool.state` alone any more than
+`GeneratePaymentsAction`'s "plan approved + Stripe active" precondition
+could. It checks `GET .../order` itself on mount, and the pool page bumps
+an `orderRefreshKey` (passed to `GenerateDistributionAction` as
+`refreshKey`) from `RecordOrderAction`'s own `onRecorded` callback — the
+exact same shape as `paymentPreconditionsRefreshKey` being bumped by
+`PurchasePlanPanel.onApproved`/`StripeOnboardingCard.onActive` in Phase 9,
+because these are two separate, self-contained sibling components with no
+other link back to each other. `hasEnteredOrdering`/`hasDistribution` in
+`pool-labels.ts` gate the section's mount point the same "or later" way as
+every earlier phase's `hasX` helper — `hasDistribution` in particular is a
+real state-transition boundary (`generateDistribution` is what flips
+`ORDERED -> DISTRIBUTING`), so `DistributionPanel`/`ClassReserveCard`/
+`CompletePoolAction` can trust it with no self-check of their own, the same
+way `PurchasePlanPanel`/`StripeOnboardingCard` trust `hasPurchasePlan`.
+
+`RecordOrderAction` itself doubles as both the recording action (no order
+yet) and the read view of what happened (one already recorded) — the same
+"one component, both a read view and a commit action" shape
+`PurchasePlanPanel` established — since, again, `pool.state` alone can't
+distinguish those two sub-states while `ORDERED`. Recording with no line
+overrides (the common case — most orders go exactly as planned) gets a
+single deliberate confirm step, same weight as `PurchasePlanPanel`'s
+approve action, rather than the full two-screen amber-then-red treatment
+reserved for actions that lock in a `pool.state` transition
+(`GenerateDistributionAction`, `CompletePoolAction`). Per-line substitution
+outcomes (`ABSORBED`/`TOP_UP_CHARGED`) are turned into plain language by
+`orderLineSubstitutionMessage` in `pool-labels.ts`, never shown as the raw
+enum value, following the same "plain language over PRD/contract jargon"
+convention as `allocationStatusLabel`/`paymentStateLabel`.
+
+`DistributionPanel` keeps the printable per-household pick lists (PRD
+§9.2 update's "Family A: 12 pencils, 2 notebooks…" artifact, and the actual
+point of this feature) and the raw per-item delivery tracker in one
+component, grouped by student rather than a flat table, since both read
+from the same `GET .../distribution` call and act on the same underlying
+items. Printing is a plain `window.print()` button plus a scoped
+`@media print` rule that hides everything on the page except the pick-list
+region, rather than a separate print-preview route — simplest thing that
+produces a genuinely clean, page-ready hand-out. `CompletePoolAction`
+folds its own "already complete" read state into the same component
+(mirroring `PaymentsThresholdPanel`'s "already finalized" branch) rather
+than a separate always-mounted read-only sibling, and leans into PRD's
+"savings shown" moment of warmth in its copy without fabricating an actual
+savings figure (that computation is explicitly a later phase's job).
 
 ## Known discrepancies / assumptions against the contract
 
@@ -528,3 +625,20 @@ Flagged here rather than editing `contracts/openapi.yaml` unilaterally:
     either isn't met, so the only 409 actually reachable by clicking the
     button in normal use is "payments already exist" — same generic-conflict
     message used elsewhere for an unreachable-in-practice case.
+15. **`PurchasePlanLine` has no `id` field anywhere in the contract, but
+    `recordOrder`'s request body needs a `purchasePlanLineId` per overridden
+    line (Phase 10).** `GET /pools/{poolId}/purchase-plan` returns each line
+    keyed only by `requirementId`/`productOfferId` — there's no line-level
+    primary key a client could echo back to identify "this specific plan
+    line" when submitting a substitution override. Rather than invent a
+    client-side id or edit `openapi.yaml` unilaterally, `RecordOrderAction`
+    sends that line's `requirementId` as the `purchasePlanLineId` value,
+    which is correct in the common case (one plan line per requirement) but
+    ambiguous if a single requirement's plan ever spans more than one
+    offer/line — the same rare edge case `PurchasePlanLine.wasteQuantity`'s
+    own "designated line" doc comment already calls out for waste
+    attribution. In that edge case, only the last edited line for a given
+    requirement in the UI ends up applied. Worth a follow-up contract
+    conversation if a future phase wants `PurchasePlanLine` to carry its own
+    `id` (mirroring every other line-item schema in this contract, e.g.
+    `OrderLine.id`).

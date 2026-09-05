@@ -88,6 +88,30 @@ export type OutstandingHousehold = DeepRequired<Schemas["OutstandingHousehold"]>
 export type PaymentsSummary = DeepRequired<Schemas["PaymentsSummary"]>;
 
 /**
+ * Ordering & distribution (PRD §9). `Order`/`OrderLine` record what was
+ * actually bought against the approved `PurchasePlan` (`POST/GET
+ * .../order`); `DistributionSummary` (made of raw `DistributionItem`s plus
+ * summed-per-household `HouseholdPickList`s) is what `POST
+ * .../distribution/generate` computes from the order and the Phase 6
+ * allocation snapshot; `ClassReserveEntry` is the leftover-stock ledger a
+ * generated distribution feeds (PRD §9.4). Same `DeepRequired` narrowing as
+ * every other response type above — none of these declare a contract
+ * `required:` list either.
+ *
+ * NOTE: `PurchasePlanLine` (above) has no `id` field of its own in the
+ * contract, but `recordOrder`'s request body needs a `purchasePlanLineId`
+ * per overridden line — see `RecordOrderAction`'s doc comment for how this
+ * app works around that gap (flagged in README's "Known discrepancies").
+ */
+export type OrderLine = DeepRequired<Schemas["OrderLine"]>;
+export type Order = DeepRequired<Schemas["Order"]>;
+export type DistributionItem = DeepRequired<Schemas["DistributionItem"]>;
+export type HouseholdPickListLine = DeepRequired<Schemas["HouseholdPickListLine"]>;
+export type HouseholdPickList = DeepRequired<Schemas["HouseholdPickList"]>;
+export type DistributionSummary = DeepRequired<Schemas["DistributionSummary"]>;
+export type ClassReserveEntry = DeepRequired<Schemas["ClassReserveEntry"]>;
+
+/**
  * Request body type — left exactly as generated. Unlike the responses above,
  * this one already carries a real `required:` list in the contract
  * (schoolYearLabel, grade, teacherLabel), and the rest (schoolId vs.

@@ -1,11 +1,15 @@
 import type {
   AllocationStatus,
   Contribution,
+  DistributionItem,
+  DistributionSummary,
+  OrderLine,
   Payment,
   Pool,
   PurchasePlan,
   Requirement,
 } from "./api/types";
+import { formatCents } from "./money";
 
 /**
  * Plain-language strictness copy for parents/organizers (PRD §3.3: "Modes:
@@ -233,4 +237,101 @@ export const PAYMENT_STATE_LABELS: Record<Payment["state"], string> = {
 
 export function paymentStateLabel(state: Payment["state"]): string {
   return PAYMENT_STATE_LABELS[state] ?? state;
+}
+
+/**
+ * States a pool passes through *before* it enters ordering (PRD §9) — i.e.
+ * before `POST /pools/{poolId}/payments/finalize` has moved it out of
+ * `PAYMENT_OPEN`. Same "or later" shape as `POOL_STATES_BEFORE_PAYMENTS`/
+ * `hasPayments` above, gating whether the ordering/distribution section of
+ * the pool page mounts at all (`RecordOrderAction`, `GenerateDistribution
+ * Action`, `DistributionPanel`, `ClassReserveCard`, `CompletePoolAction`).
+ *
+ * Unlike every earlier transition in this app, recording an order
+ * (`POST .../order`) does NOT itself change `pool.state` — a pool stays
+ * `ORDERED` whether or not an order has been recorded yet, exactly the same
+ * "state alone can't tell you" wrinkle `GeneratePaymentsAction` already
+ * has for "plan approved + Stripe active" (see its doc comment and
+ * README's discrepancy list). So `RecordOrderAction` and
+ * `GenerateDistributionAction` both do their own `GET .../order`
+ * precondition check on mount, the same "trust the mount point for *when*
+ * to show this at all, then self-check the finer-grained precondition"
+ * pattern `GeneratePaymentsAction` established.
+ */
+const POOL_STATES_BEFORE_ORDERING: ReadonlySet<Pool["state"]> = new Set([
+  "DRAFT",
+  "OPEN_FOR_INVENTORY",
+  "OPEN_FOR_CONTRIBUTIONS",
+  "RECONCILING",
+  "PURCHASE_PROPOSED",
+  "PAYMENT_OPEN",
+]);
+
+export function hasEnteredOrdering(state: Pool["state"]): boolean {
+  return !POOL_STATES_BEFORE_ORDERING.has(state);
+}
+
+/**
+ * States a pool passes through *before* a distribution batch exists (PRD
+ * §9.2/§9.3) — i.e. before `POST /pools/{poolId}/distribution/generate` has
+ * moved it `ORDERED -> DISTRIBUTING`. Unlike `hasEnteredOrdering` above,
+ * this transition IS a state change (mirrors `hasPurchasePlan`/
+ * `hasPayments`'s "or later" shape exactly), so `DistributionPanel` and
+ * `ClassReserveCard` can trust `hasDistribution(pool.state)` alone with no
+ * self-check of their own.
+ */
+const POOL_STATES_BEFORE_DISTRIBUTION: ReadonlySet<Pool["state"]> = new Set([
+  "DRAFT",
+  "OPEN_FOR_INVENTORY",
+  "OPEN_FOR_CONTRIBUTIONS",
+  "RECONCILING",
+  "PURCHASE_PROPOSED",
+  "PAYMENT_OPEN",
+  "ORDERED",
+]);
+
+export function hasDistribution(state: Pool["state"]): boolean {
+  return !POOL_STATES_BEFORE_DISTRIBUTION.has(state);
+}
+
+/**
+ * Plain-language copy for one `OrderLine`'s substitution outcome (PRD §9.1
+ * update) — never the raw `ABSORBED`/`TOP_UP_CHARGED` enum values. `null`
+ * (no delta recorded — the line was bought exactly as planned) reads as
+ * "Bought as planned", distinct from either resolution.
+ */
+export function orderLineSubstitutionMessage(line: OrderLine): string {
+  if (line.substitutionResolution === null || line.substitutionDeltaCents === null) {
+    return "Bought exactly as planned.";
+  }
+  const amount = formatCents(Math.abs(line.substitutionDeltaCents));
+  const direction = line.substitutionDeltaCents >= 0 ? "more" : "less";
+  if (line.substitutionResolution === "ABSORBED") {
+    return `This was ${amount} ${direction} than planned — that's small enough to just absorb.`;
+  }
+  return `This was ${amount} ${direction} than planned — an extra charge has been added for the families who needed this item.`;
+}
+
+/**
+ * Plain-language labels for `DistributionSummary.mode` (PRD §9.2's three
+ * hand-off styles), never the raw enum value.
+ */
+export const DISTRIBUTION_MODE_LABELS: Record<DistributionSummary["mode"], string> = {
+  CLASSROOM_DESK: "Classroom desks",
+  LOBBY_PICKUP: "School lobby / event pickup",
+  HOUSEHOLD_BAG: "Household bags",
+};
+
+export function distributionModeLabel(mode: DistributionSummary["mode"]): string {
+  return DISTRIBUTION_MODE_LABELS[mode] ?? mode;
+}
+
+/**
+ * Plain-language delivery status for one `DistributionItem`, driven by
+ * `deliveredAt` presence — same "one sentence, reused verbatim across
+ * surfaces" approach as every other status helper above, shared between the
+ * organizer's `DistributionPanel` and a household's own distribution page.
+ */
+export function distributionItemStatusLabel(item: DistributionItem): string {
+  return item.deliveredAt ? "Delivered" : "Not yet delivered";
 }

@@ -6,7 +6,14 @@ import { api } from "@/lib/api/client";
 import type { PoolDetail } from "@/lib/api/types";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { setPendingRedirect } from "@/lib/pending-redirect";
-import { hasPayments, hasPurchasePlan, hasReconciled, poolStateLabel } from "@/lib/pool-labels";
+import {
+  hasDistribution,
+  hasEnteredOrdering,
+  hasPayments,
+  hasPurchasePlan,
+  hasReconciled,
+  poolStateLabel,
+} from "@/lib/pool-labels";
 import { RequirementForm } from "@/components/RequirementForm";
 import { RequirementListItem } from "@/components/RequirementListItem";
 import { ConfirmPoolAction } from "@/components/ConfirmPoolAction";
@@ -21,6 +28,11 @@ import { StripeOnboardingCard } from "@/components/StripeOnboardingCard";
 import { GeneratePaymentsAction } from "@/components/GeneratePaymentsAction";
 import { OrganizerPaymentsPanel } from "@/components/OrganizerPaymentsPanel";
 import { PaymentsThresholdPanel } from "@/components/PaymentsThresholdPanel";
+import { RecordOrderAction } from "@/components/RecordOrderAction";
+import { GenerateDistributionAction } from "@/components/GenerateDistributionAction";
+import { DistributionPanel } from "@/components/DistributionPanel";
+import { ClassReserveCard } from "@/components/ClassReserveCard";
+import { CompletePoolAction } from "@/components/CompletePoolAction";
 
 type LoadState =
   | { status: "loading" }
@@ -52,6 +64,12 @@ export default function PoolDetailPage() {
   // one-time summary fetch — in a separate sibling component — knows to
   // refetch.
   const [paymentsRefreshKey, setPaymentsRefreshKey] = useState(0);
+  // Bumped whenever RecordOrderAction records an order — a separate,
+  // self-contained sibling with no other link back to
+  // GenerateDistributionAction, whose own "order recorded yet?"
+  // precondition check (fetched once on mount) would otherwise never learn
+  // its "not ready yet" answer is stale.
+  const [orderRefreshKey, setOrderRefreshKey] = useState(0);
 
   useEffect(() => {
     if (auth.status === "anonymous") {
@@ -197,6 +215,21 @@ export default function PoolDetailPage() {
         </a>
       )}
 
+      {hasDistribution(pool.state) && (
+        <a
+          href={`/pools/${pool.id}/distribution`}
+          className="mt-3 block rounded-lg border-2 border-brand-200 bg-brand-50 p-4 hover:bg-brand-100"
+        >
+          <p className="text-base font-semibold text-brand-900">
+            What you're receiving →
+          </p>
+          <p className="mt-1 text-sm text-brand-800">
+            See what your household is getting from this pool's purchase, and
+            whether it's arrived yet.
+          </p>
+        </a>
+      )}
+
       {isOrganizer && pool.state !== "DRAFT" && (
         <div className="mt-4 space-y-4">
           <InventorySummaryPanel poolId={pool.id} />
@@ -272,6 +305,39 @@ export default function PoolDetailPage() {
             </>
           )}
           <MyAllocationPanel poolId={pool.id} />
+        </div>
+      )}
+
+      {isOrganizer && hasEnteredOrdering(pool.state) && (
+        <div className="mt-4 space-y-4">
+          {pool.state === "ORDERED" && (
+            <RecordOrderAction
+              poolId={pool.id}
+              onRecorded={() => setOrderRefreshKey((k) => k + 1)}
+            />
+          )}
+          {pool.state === "ORDERED" && (
+            <GenerateDistributionAction
+              poolId={pool.id}
+              refreshKey={orderRefreshKey}
+              onGenerated={() =>
+                updatePool((prev) => ({ ...prev, state: "DISTRIBUTING" }))
+              }
+            />
+          )}
+          {hasDistribution(pool.state) && (
+            <>
+              <DistributionPanel poolId={pool.id} />
+              <ClassReserveCard poolId={pool.id} />
+              <CompletePoolAction
+                poolId={pool.id}
+                poolState={pool.state}
+                onCompleted={(completed) =>
+                  setState({ status: "ready", pool: completed })
+                }
+              />
+            </>
+          )}
         </div>
       )}
 
