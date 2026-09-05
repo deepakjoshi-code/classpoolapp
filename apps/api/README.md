@@ -2,9 +2,9 @@
 
 Spring Boot 3 / Java 21 backend implementing `contracts/openapi.yaml`'s Phase 1 (PWA shell + auth),
 Phase 2 (schools/classes/memberships), Phase 3 (pools + manual requirements, no AI yet),
-Phase 4 (household inventory — "Shop Your Home First"), Phase 5 (surplus contribution pool), and
-Phase 6/7 (allocation & residual-demand engine) surface — see `ARCHITECTURE.md` §4 and
-`docs/PRD.md` §17.3 for the build-order this corresponds to.
+Phase 4 (household inventory — "Shop Your Home First"), Phase 5 (surplus contribution pool),
+Phase 6/7 (allocation & residual-demand engine), and Phase 8 (bulk pack optimizer / purchase plan)
+surface — see `ARCHITECTURE.md` §4 and `docs/PRD.md` §17.3 for the build-order this corresponds to.
 
 ## Running locally
 
@@ -419,20 +419,118 @@ returns an empty list (200, not an error) if reconcile hasn't run yet — the sa
 yet" precedent `InventoryService.getMyInventory` sets for a still-`DRAFT` pool — while
 `getAllocationForOrganizer` 409s in that case instead, per the contract.
 
+## Bulk pack optimizer (Phase 8) design notes
+
+New surface, split into its own `PurchasePlanController` rather than folded into `PoolController`
+(the latter was already 148 lines before these six routes — the same size-driven judgment call the
+Phase 6/7 agent flagged as theirs to make before adding three more routes there): `POST
+/pools/{poolId}/requirements/{requirementId}/product-offers`, `GET /pools/{poolId}/product-offers`,
+`DELETE /pools/{poolId}/product-offers/{offerId}`, `POST /pools/{poolId}/purchase-plan/generate`,
+`GET /pools/{poolId}/purchase-plan`, `POST /pools/{poolId}/purchase-plan/approve` — delegating to a
+new `PurchasePlanService`/`ProductOffer`+`PurchasePlan`+`PurchasePlanLine` entities over the V1
+migration's already-present `product_offer`/`purchase_plan`/`purchase_plan_line` tables. **No new
+migration was needed** — unlike Phase 6/7's `allocation` table (schema-incompatible with the
+contract's `AllocationLine` shape, and replaced with a fresh V3 migration), these three tables
+already have exactly the columns the contract's `ProductOffer`/`PurchasePlan`/`PurchasePlanLine`
+schemas need, so the JPA entities map onto them directly.
+
+**The optimizer (PRD §7.1) is a separated, independently-unit-tested class, `PackOptimizer`.**
+Package-private in `service/`, with no Spring/HTTP/persistence dependency at all — just a static
+`optimize(need, offers)` method — so `PackOptimizerTest` can exercise the DP directly. It's the
+classic unbounded-knapsack "minimum cost to cover at least N units": `dp[0..need+maxPackQuantity]`,
+one relaxation pass per offer, with a parent-pointer array for backtracking. The PRD's own worked
+example (need=320 pencils; 24-pack@499c, 48-pack@849c, 144-pack@1899c) is asserted numerically in
+`PackOptimizerTest.optimize_pencilExample_matchesPrdWorkedAnswerExactly`: the DP finds 2×144-pack +
+1×48-pack = 336 units for 4647 cents, waste 16 — independently verified by hand in that test's
+Javadoc (comparing against 3×144-pack alone, 2×144+2×24, and 1×144+4×48, all of which cost more),
+not just trusted because the code produced a number.
+
+**The least-waste tie-break falls out of the scan order, no separate pass needed.** The contract
+says "minimize cost first, then fewest total units purchased." Scanning `q` from `need` to
+`need+maxPackQuantity` ascending and only overwriting the running-best `(cost, q)` pair on a
+*strict* cost improvement means the smallest `q` achieving the minimum cost is kept automatically —
+ties at a higher `q` never overwrite it. `PackOptimizerTest`'s tie-break test (two offers, same
+cost, one with zero waste and one with one unit of waste) exercises this directly.
+
+**Waste attribution when a requirement's plan spans multiple offers.** The DP's backtracking can
+legitimately use more than one distinct offer for the same requirement (the PRD's own worked
+example does — 144-pack and 48-pack together). `PackOptimizer` returns its chosen offers sorted by
+`offerId` for exactly one reason: `PurchasePlanService.generate` always attributes the requirement's
+*entire* waste number to the first (smallest-`offerId`) `PurchasePlanLine`, zero on every other line
+for that requirement — a stable, deterministic "which line" answer with no dependence on map/HashSet
+iteration order. This is an explicit judgment call, since the contract only says the whole number
+goes on "a single designated line," not which one — sorting by `offerId` was picked because it's
+the only ordering available that has nothing to do with business meaning (unlike, say, "the
+cheapest line" or "the largest line," either of which would read as an implied policy this phase
+isn't actually making).
+
+**Why shipping isn't in the optimizer's cost function yet.** `ProductOffer.shippingCents` is
+mapped, validated (`@Min(0)`, defaults to 0 when omitted per the contract), and returned in every
+response — but `PackOptimizer.optimize` compares offers on `priceCents` alone. Folding shipping
+into the cost function is genuinely ambiguous without more product decisions this phase doesn't
+make: is shipping per-pack, per-order, or amortized once across every line for a requirement (or
+across the whole plan)? The task description calls this out explicitly as V1-scoped-out, in the
+same spirit as the contract not yet reasoning about tax/fees either — flagged here rather than
+guessed at.
+
+**Validate-before-DP, and name every missing requirement at once.** `generate` reads back Phase
+6/7's frozen `ResidualDemandLine` snapshot (never recomputed), filters to `residualDemand > 0`, and
+checks *every one* of those requirements has at least one `ProductOffer` before running the
+optimizer on any of them — collecting every requirement name still missing an offer into one 409
+message, rather than 409ing on the first miss and making the organizer fix them one at a time. A
+requirement with `residualDemand == 0` never triggers this check at all and is skipped before ever
+querying its offers — `PurchasePlanServiceTest.generate_skipsRequirementsWithZeroResidualDemand_evenWithNoOffers`
+proves the skip happens even when such a requirement has zero candidate offers, which would
+otherwise 409 if the filter were missing.
+
+**A zero-residual-demand pool still gets a (trivial) plan.** If every requirement's residual demand
+is already 0 at generate time (fully covered by household inventory + pool contributions), nothing
+in the contract says this should be an error — `generate` still creates a `PurchasePlan` with zero
+`PurchasePlanLine` rows and `totalCostCents = 0`, and still moves the pool `RECONCILING ->
+PURCHASE_PROPOSED`. This wasn't explicitly specified either way; flagged here as the judgment call
+rather than silently rejecting an all-fulfilled pool.
+
+**`approve` deliberately never touches `Pool.state`.** Per the contract's own summary ("Does not
+itself move the Pool's own state — billing/payment (Phase 9) owns the next pool-state transition
+once an approved plan exists"), `PurchasePlanService.approve` only calls `PurchasePlan.approve()`
+(`PROPOSED -> APPROVED`, sets `approvedAt`) — `PurchasePlanServiceTest
+.approve_transitionsProposedToApproved_withoutTouchingPoolState` asserts `poolRepository` is never
+even saved during approval, so this boundary can't silently regress once Phase 9 exists and starts
+reaching for `PoolService`'s package-visible transition methods.
+
+**One plan per pool, enforced in the service, not the schema.** The V1 migration's `purchase_plan`
+table has no unique constraint on `pool_id` (unlike, say, `residual_demand_line`'s per-requirement
+uniqueness in the V3 migration) — `PurchasePlanRepository.existsByPoolId`/`findByPoolId` are how
+`generate`/`getPurchasePlan`/`approve` all enforce "at most one plan per pool" themselves. This
+matches the "schema changes are reviewed separately" boundary the Phase 5 Contribution `studentId`
+gap and the Phase 6/7 `allocation` table both already established — widening the migration to add
+the constraint is a fine follow-up, not made unilaterally here since the service-level check is
+already sufficient for V1's correctness bar (no concurrent-request race is exercised or claimed to
+be closed by this).
+
+**Authorization is organizer-only across the entire surface** — `addProductOffer`,
+`listProductOffers`, `removeProductOffer`, `generate`, `getPurchasePlan`, and `approve` all use
+`PoolService.requireOrganizer`, matching the contract's uniform "Caller is not an organizer" 403 on
+every one of these six endpoints (unlike Phase 6/7's allocation surface, which has both an
+organizer-only and a member-facing "mine" view — this phase has no member-facing counterpart at
+all, per the contract).
+
 ## Package layout
 
 ```
 app.classpool.api
 ├── domain/       JPA entities — Phase 1-2 (AppUser, Household, Student, School, SchoolYear,
 │                 Classroom, Membership, Invite), Phase 3 (Pool, Requirement), Phase 4
-│                 (ParentInventory), Phase 5 (Contribution), and Phase 6/7 (AllocationLine,
-│                 ResidualDemandLine) tables, plus enums
+│                 (ParentInventory), Phase 5 (Contribution), Phase 6/7 (AllocationLine,
+│                 ResidualDemandLine), and Phase 8 (ProductOffer, PurchasePlan, PurchasePlanLine)
+│                 tables, plus enums
 ├── repository/   Spring Data JPA repositories, including the native pg_trgm dedup queries and the
 │                 shared organizer-role / confirmed-student-count / join-order queries on
 │                 MembershipRepository
 ├── service/      Business logic — auth, schools, classrooms, invites, household dashboard, pools
 │                 + requirements, household inventory, surplus contributions, the allocation &
-│                 residual-demand engine, the Redis-backed session/magic-link stores, email boundary
+│                 residual-demand engine, the bulk-pack optimizer (PurchasePlanService +
+│                 PackOptimizer), the Redis-backed session/magic-link stores, email boundary
 ├── security/     Cookie-based session auth filter + cookie read/write helper
 ├── config/       SecurityConfig (filter chain, public-endpoint allowlist), OAuth2Config
 ├── dto/          Request/response records matching contracts/openapi.yaml's schemas exactly
