@@ -175,8 +175,11 @@ public class OrderService {
         int actualCostCents = line.getActualCostCents() == null ? plannedCostCents : line.getActualCostCents();
         int delta = actualCostCents - plannedCostCents;
         Integer deltaResponse = delta == 0 ? null : delta;
+        // Mirrors the exact condition recordOrder uses to decide whether to actually bill anyone
+        // (delta > 0 && 10 * delta > plannedCostCents) — a cost decrease, however large, is never
+        // TOP_UP_CHARGED (nothing was ever billed for it), just ABSORBED as unlooked-for savings.
         String resolution = delta == 0 ? null
-                : (10 * Math.abs(delta) <= plannedCostCents ? "ABSORBED" : "TOP_UP_CHARGED");
+                : (delta > 0 && 10 * delta > plannedCostCents ? "TOP_UP_CHARGED" : "ABSORBED");
         Requirement requirement = planLine == null ? null : requirementsById.get(planLine.getRequirementId());
         return new OrderLineResponse(
                 line.getId(),

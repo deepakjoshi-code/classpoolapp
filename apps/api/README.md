@@ -689,21 +689,19 @@ cent (the same accepted per-requirement rounding drift, verified directly in
 33+33+33=99-not-100 worked example) — a household then pays it through the existing
 `payMyPayment`/cash-flow surface exactly like any other `Payment` row, with zero new UI.
 
-**A judgment call the contract doesn't resolve: a large *negative* delta (a substitution that came
-in well *under* budget).** The contract's threshold math is written in terms of `abs(delta)`, which
-reads as symmetric — a delta far enough under budget would, by the letter of the rule, also be
-`TOP_UP_CHARGED`. But "top-up" only makes product sense for an overage (charging households *more*
-money); billing a household for a *negative* amount doesn't correspond to anything a household can
-pay through `payMyPayment`, and `OrderLine`'s resolution enum has no third "refund due" value to
-route an under-budget substitution to instead. Resolved here as: the response's
-`substitutionResolution` still reports `TOP_UP_CHARGED` for a large negative delta (the abs-based
-threshold math is unchanged, so a client reading the line still sees "this substitution moved by
-more than 10%"), but `OrderService.recordOrder` only actually calls `createTopUpPayments` when
-`delta > 0` — a negative-delta "top-up" never bills anyone.
-`OrderServiceTest.recordOrder_negativeDeltaBeyondThreshold_isLabeledTopUpCharged_butNeverBillsAnyone`
-exercises this directly. Flagged here as a genuine product-decision gap in the contract, not
-silently worked around; a later phase could add a real refund flow for this case if it turns out to
-matter in practice.
+**A large *negative* delta (a substitution that came in well *under* budget) is `ABSORBED`, never
+`TOP_UP_CHARGED`.** The contract's threshold math is written in terms of `abs(delta)`, which reads
+as symmetric at first glance — a delta far enough under budget would, by the letter of the 10% rule
+alone, also cross the threshold. But "top-up" only makes product sense for an overage (charging
+households *more* money); billing a household for a *negative* amount doesn't correspond to
+anything a household can pay through `payMyPayment`, and `OrderLine`'s resolution enum has no third
+"refund due" value to route an under-budget substitution to instead. Resolved as: both
+`OrderService.recordOrder` (whether to call `createTopUpPayments`) and `toLineResponse` (what
+`substitutionResolution` reports) use the identical `delta > 0 && 10 * delta > plannedCostCents`
+condition — a cost decrease of any size is `ABSORBED`, matching that nothing was ever billed for it.
+`OrderServiceTest.recordOrder_negativeDeltaBeyondThreshold_isLabeledAbsorbed_andNeverBillsAnyone`
+exercises this directly. A later phase could add a real refund flow for a substantial under-budget
+substitution if that turns out to matter in practice — V1 just absorbs the saving.
 
 **`generateDistribution`'s skip rule matches the contract's own algebra exactly.** One
 `DistributionItem` per `AllocationLine` where `poolFulfilledQuantity + purchaseRequiredQuantity >

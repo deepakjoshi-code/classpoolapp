@@ -181,7 +181,7 @@ class OrderServiceTest {
     }
 
     @Test
-    void recordOrder_negativeDeltaBeyondThreshold_isLabeledTopUpCharged_butNeverBillsAnyone() {
+    void recordOrder_negativeDeltaBeyondThreshold_isLabeledAbsorbed_andNeverBillsAnyone() {
         Pool pool = newPool(PoolState.ORDERED);
         Requirement pencils = newRequirement(pool.getId(), "Pencils");
         PurchasePlanLine planLine = newPlanLine(pencils.getId(), 1000);
@@ -189,15 +189,16 @@ class OrderServiceTest {
         stubPlanAndPersistence(pool.getId(), planLine);
         when(requirementRepository.findAllById(any())).thenReturn(List.of(pencils));
 
-        // Came in well UNDER budget (a much cheaper substitution) — still >10% away from planned in
-        // absolute terms, so the same threshold math labels it TOP_UP_CHARGED, but there is nothing
-        // to bill (see OrderService.recordOrder's Javadoc for why this doesn't create a Payment).
+        // Came in well UNDER budget (a much cheaper substitution) — more than 10% away from planned
+        // in absolute terms, but a cost decrease is never TOP_UP_CHARGED (nothing was ever billed
+        // for it): the response labels it ABSORBED as unlooked-for savings, matching the exact
+        // delta > 0 condition recordOrder itself uses to decide whether to bill anyone.
         RecordOrderRequest request = new RecordOrderRequest(null,
                 List.of(new RecordOrderLineRequest(planLine.getId(), 800, "cheaper pencils")));
         OrderResponse response = orderService.recordOrder(callerId, pool.getId(), request);
 
         assertThat(response.lines().get(0).substitutionDeltaCents()).isEqualTo(-200);
-        assertThat(response.lines().get(0).substitutionResolution()).isEqualTo("TOP_UP_CHARGED");
+        assertThat(response.lines().get(0).substitutionResolution()).isEqualTo("ABSORBED");
         verify(paymentService, never()).createTopUpPayments(any(), any(), anyInt());
     }
 
