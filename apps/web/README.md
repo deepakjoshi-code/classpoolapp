@@ -5,9 +5,12 @@ frontend. Covers Phase 1 (PWA shell + auth), Phase 2 (schools/classes/
 memberships), Phase 3 (pools + manual requirement ingestion/verification),
 Phase 4 (household inventory — "Shop Your Home First"), Phase 5
 (contribution pool — offer/withdraw surplus, organizer receive confirmation),
-and Phase 6 (allocation & residual demand — organizer "work out what still
+Phase 6 (allocation & residual demand — organizer "work out what still
 needs buying" action, organizer purchase breakdown, household's own status
-view) of the V1 build order — see `../../ARCHITECTURE.md` §4 and
+view), and Phase 7+8 (product-offer entry and the bulk-pack purchase plan —
+organizer candidate price options per item, "work out the cheapest way to
+buy what's left" action, the generated plan with its running total and an
+approve step) of the V1 build order — see `../../ARCHITECTURE.md` §4 and
 `../../docs/PRD.md` §17.3.
 
 ## Running it
@@ -124,6 +127,41 @@ Component tests live in `src/tests/` (Vitest + React Testing Library), per
   plain-language status per (requirement, student) — never a raw enum
   value — and treats an empty array (reconcile hasn't run yet) as a normal
   empty state, not an error.
+- `money.test.ts` — `formatCents`/`dollarsToCents` (PRD §7.3/§8): integer
+  cents format as a dollar string (`4647` -> `"$46.47"`, never raw cents or
+  an unrounded float), a typed dollar string parses back to the same integer
+  cents (rounding away IEEE-754 float drift, e.g. `"4.99"` -> `499`, not
+  `498`), a round trip through both directions lands on the same cents, and
+  unparseable input returns `NaN` rather than silently defaulting to 0.
+- `ProductOfferForm.test.tsx` — the organizer's "add a price option" form
+  (PRD §7.3): renders already-added offers with cents formatted as dollars
+  and a remove action, submits an add converting the typed dollar price (and
+  optional shipping) to integer cents in the exact `POST` body shape, keeps
+  submit disabled until retailer/pack size/price are all filled in, and
+  shows distinct messages for the pool-no-longer-RECONCILING 409 on add and
+  the plan-already-generated 409 on remove.
+- `OrganizerAllocationPanel.test.tsx` also covers the embedded offer forms
+  (added on top of this component in Phase 7): while `poolState` is
+  `"RECONCILING"`, the "add a price option" form (and its already-added
+  offers) appears only under a requirement that still has residual demand,
+  disappears once the pool has moved past `RECONCILING` (and the
+  product-offers endpoint isn't even called in that case), and adding an
+  offer through the embedded form updates what's shown without a full
+  reload.
+- `GeneratePurchasePlanAction.test.tsx` — the organizer's one-way "work out
+  the cheapest way to buy what's left" action (PRD §7.1's bulk-pack
+  optimizer, described in plain language): asserts `POST
+  /pools/{id}/purchase-plan/generate` is unreachable without first passing
+  through the "this can't be undone" step, that cancelling backs out without
+  calling the API, and that the missing-price-option 409 and a generic
+  failure render distinct messages (never the wrong one for the wrong case).
+- `PurchasePlanPanel.test.tsx` — the generated purchase plan (PRD §7-8):
+  fetches `GET /pools/{id}/purchase-plan` and renders each line's
+  retailer/pack/quantity/cost and a running grand total, all formatted as
+  dollars (never raw cents), the plan's own PROPOSED/APPROVED state in
+  plain language (never the raw enum), the not-yet-generated 409 handled
+  gracefully, and the approve action's explicit-confirm-then-success path
+  updating local state (to `APPROVED`) without a full reload.
 
 ## API client — generated from the contract
 
@@ -192,7 +230,7 @@ local inventory edits" — not yet built, out of scope for Phase 1-2).
 | `/classrooms/[id]/invite` | Join link + QR + one-tap share, shown right after creation |
 | `/join/[token]` | Public, pre-auth invite landing page → sign-in → student-name join step |
 | `/classrooms/[id]/pools/new` | Organizer/co-organizer only: name a pool ("Fall Supplies") and start it in `DRAFT` |
-| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4). While the pool is `OPEN_FOR_INVENTORY`, an organizer also sees `ReconcileAction` — the one-way "work out what still needs buying" step. Once the pool has moved past that (`RECONCILING` or later), everyone sees `MyAllocationPanel` (their own household's status) and an organizer additionally sees `OrganizerAllocationPanel` (the full purchase breakdown) (Phase 6) |
+| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4). While the pool is `OPEN_FOR_INVENTORY`, an organizer also sees `ReconcileAction` — the one-way "work out what still needs buying" step. Once the pool has moved past that (`RECONCILING` or later), everyone sees `MyAllocationPanel` (their own household's status) and an organizer additionally sees `OrganizerAllocationPanel` (the full purchase breakdown) (Phase 6). While still `RECONCILING`, that same panel also embeds a `ProductOfferForm` per item that still needs buying, and the organizer sees `GeneratePurchasePlanAction` — the one-way "work out the cheapest way to buy what's left" step; once a plan exists (`PURCHASE_PROPOSED` or later) the organizer additionally sees `PurchasePlanPanel` (chosen retailer/pack/cost per item, running total, and an approve step) (Phase 7+8) |
 | `/pools/[id]/inventory` | "Shop Your Home First" (PRD §4) — the caller's own household inventory checklist: one +/- stepper row per (requirement, student) they have in this classroom (Phase 4) |
 | `/pools/[id]/contribute` | "Offer surplus" (PRD §5.1) — the caller's own pledge screen: one offer card per (requirement, student) they have in this classroom, showing their own pledge status and a withdraw action while still `PLEDGED`. Linked from `/pools/[id]` once the pool is past `DRAFT`, alongside (but visually secondary to, per the "optional/low-pressure" framing) the inventory link (Phase 5). The organizer's confirmation view is not a page — it's `OrganizerContributionsPanel`, embedded directly on `/pools/[id]` next to the inventory summary, same as Phase 4 |
 
@@ -209,6 +247,29 @@ as `contributionStateLabel`) — it takes an optional purchase-quantity
 argument so the `PURCHASE_REQUIRED` case can name the actual shortfall
 ("Still needs 2 — will be part of the class purchase"), which a bare
 `Record<AllocationStatus, string>` lookup can't express on its own.
+
+Phase 7+8's product-offer and purchase-plan UI follows the same "embed on
+`/pools/[id]`, don't add pages" pattern, and reuses `OrganizerAllocationPanel`
+as the mount point for offer entry rather than adding a parallel fetch of the
+residual-demand list: that panel already knows, per requirement, whether
+`residualDemand > 0`, so it now also fetches `GET /pools/{id}/product-offers`
+once (only while `pool.state === "RECONCILING"`, passed in as a `poolState`
+prop) and renders a `ProductOfferForm` inline under each requirement that
+still needs buying, passing down that requirement's already-added offers and
+taking the add/remove callbacks to update its own state — no full reload,
+and no second component independently re-deriving "which requirements still
+need buying." `GeneratePurchasePlanAction` (mounted alongside it, organizer +
+`RECONCILING` only) and `PurchasePlanPanel` (mounted once
+`hasPurchasePlan(pool.state)`, a new `pool-labels.ts` helper with the same
+"or later" shape as `hasReconciled`) are separate components, same
+"transition action" vs. "read view" split as `ReconcileAction`/
+`OrganizerAllocationPanel`. `formatCents`/`dollarsToCents` in
+`src/lib/money.ts` are this app's first money helpers (no earlier phase
+handled currency), establishing the convention going forward: the API always
+carries integer cents, and only the UI boundary — a price input, a
+`formatCents` call — ever converts to/from a dollar amount. Copy again avoids
+the PRD's internal "optimizer"/"integer program"/"bulk-pack" terms (§7-8) in
+favor of plain language ("work out the cheapest way to buy what's left").
 
 ## Known discrepancies / assumptions against the contract
 
@@ -325,3 +386,22 @@ Flagged here rather than editing `contracts/openapi.yaml` unilaterally:
     endpoint is never even called, then re-renders it as an organizer on the
     same pool and asserts the panel does appear — proving the gate is a real
     role check, not a component that just never renders.
+12. **`generatePurchasePlan`'s 409 collapses three different failure reasons
+    into one status code with no distinguishing response field (Phase 7+8).**
+    Per the contract's own description, that 409 covers "pool is not
+    RECONCILING, a plan already exists, OR a requirement with residual
+    demand has no offers" — but the response schema declares no body content
+    to tell those apart, and every other 409 in this app is already handled
+    by status code alone (never by parsing an error body), so there's no
+    existing pattern to extend here either. `GeneratePurchasePlanAction`
+    shows its specific "add a price option first" message for every 409,
+    which is accurate given the page's own gating: it only mounts this
+    action while `pool.state === "RECONCILING"` and no plan has been
+    generated yet (mirrored in `hasPurchasePlan`'s pool-state check), so the
+    other two reasons are unreachable through this button in normal use —
+    same "trust the mount point" reasoning `OrganizerAllocationPanel`
+    already relies on for its own not-reconciled 409. Worth a follow-up
+    contract conversation if a future phase wants the three cases
+    distinguished (e.g. a `reason` field or per-requirement detail in the
+    409 body) rather than relying on client-side gating to make the
+    single message accurate.
