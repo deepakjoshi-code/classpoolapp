@@ -1,9 +1,9 @@
 # ClassPool API
 
 Spring Boot 3 / Java 21 backend implementing `contracts/openapi.yaml`'s Phase 1 (PWA shell + auth),
-Phase 2 (schools/classes/memberships), Phase 3 (pools + manual requirements, no AI yet), and
-Phase 4 (household inventory — "Shop Your Home First") surface — see `ARCHITECTURE.md` §4 and
-`docs/PRD.md` §17.3 for the build-order this corresponds to.
+Phase 2 (schools/classes/memberships), Phase 3 (pools + manual requirements, no AI yet),
+Phase 4 (household inventory — "Shop Your Home First"), and Phase 5 (surplus contribution pool)
+surface — see `ARCHITECTURE.md` §4 and `docs/PRD.md` §17.3 for the build-order this corresponds to.
 
 ## Running locally
 
@@ -273,18 +273,71 @@ entity's field, so it has to live in the service regardless.
 can never drift apart, following the same instinct as `RequirementAssembler`'s own Javadoc about
 `totalDemand` being frozen rather than recomputed live.
 
+## Surplus contribution pool (Phase 5) design notes
+
+New surface, all on the existing `PoolController`: `POST
+/pools/{poolId}/requirements/{requirementId}/contributions` (offer), `GET
+/pools/{poolId}/contributions/mine`, `DELETE /pools/{poolId}/contributions/{contributionId}`
+(withdraw), `GET /pools/{poolId}/contributions` (organizer listing), `POST
+/pools/{poolId}/contributions/{contributionId}/receive` — delegating to a new
+`ContributionService`/`Contribution` entity/`ContributionRepository` over the V1 migration's
+already-present `contribution` table. No schema changes were needed to add the surface itself —
+see the flagged gap below for the one thing the schema can't back.
+
+**V1 only ever creates `DONATE` rows.** PRD §5.1 marks Lend/Sell as explicitly "later," so
+`ContributionService.offer` rejects any other `mode` with 400 — but `ContributionMode` and
+`ContributionState` are laid down with their *full* enum sets (matching the migration's check
+constraints in full, same instinct as `PoolState`/`RequirementState`), including the Lend
+return-path states from PRD §5.4's PM-update, since a later phase advances into them without a
+migration.
+
+**Authorization mirrors Phase 4's per-student check, but the pledge is attributed to the parent.**
+`offer` uses the identical `MembershipRepository
+.findByClassroom_IdAndParentUserIdAndStudent_Id` gate as `InventoryService.setInventory` — the
+caller must hold a Membership on the given `studentId` — but the `contribution` table's column is
+`offering_parent_id`, not `student_id` (see the flagged gap below), so the row itself only ever
+records the caller's own user id; the student is checked and then discarded.
+
+**Withdraw is a parent action, not an organizer one — even though both read the same row.**
+`GET /pools/{poolId}/contributions` (organizer) and `DELETE
+/pools/{poolId}/contributions/{contributionId}` (offering parent) both resolve a contribution
+scoped to the pool via `ContributionRepository.findByIdAndRequirementIdIn` (a
+`RequirementRepository.findByIdAndPoolId`-style scoped fetch, one join further out:
+contribution -> requirement -> pool), but `withdraw` then checks `offeringParentId == callerUserId`
+regardless of the caller's role — the organizer gets 403 there too, per contract ("Caller does not
+own this contribution").
+
+**`offeringParentDisplayName` is populated on exactly one endpoint.** Per PRD §5.3's privacy
+model ("organizer can see contributor identity ... no public household-level inventory
+disclosure"), only `listForOrganizer` looks up display names (batched via
+`AppUserRepository.findAllById`, same batch-not-N+1 instinct as `InventoryService.getSummary`).
+`offer`, `getMine`, and `markReceived` all pass `null` for it — the field is contract-nullable and
+means "not this endpoint's business to say," not "unknown."
+
+**Flagged schema gap — not patched, per this task's boundary.** The contract's `Contribution`
+schema declares `studentId`/`studentFirstName` as ordinary (non-nullable) fields, but the V1
+migration's `contribution` table has no `student_id` column — only `offering_parent_id` (a parent,
+not a specific student). `ContributionResponse.studentId`/`.studentFirstName` are therefore always
+`null` on every Phase 5 endpoint, including the immediate `POST .../contributions` response (even
+though the request just supplied a `studentId` — it's used for the authorization check and then
+never persisted, so it can't be echoed back consistently with what `GET .../mine`/the organizer
+listing would show for the same row later). This is a real contract/schema mismatch, flagged here
+rather than resolved by unilaterally adding a `student_id` column to the migration or relaxing the
+contract's nullability — either fix is a schema/contract decision for separate review, not an
+implementation-layer one.
+
 ## Package layout
 
 ```
 app.classpool.api
 ├── domain/       JPA entities — Phase 1-2 (AppUser, Household, Student, School, SchoolYear,
-│                 Classroom, Membership, Invite), Phase 3 (Pool, Requirement), and Phase 4
-│                 (ParentInventory) tables, plus enums
+│                 Classroom, Membership, Invite), Phase 3 (Pool, Requirement), Phase 4
+│                 (ParentInventory), and Phase 5 (Contribution) tables, plus enums
 ├── repository/   Spring Data JPA repositories, including the native pg_trgm dedup queries and the
 │                 shared organizer-role / confirmed-student-count queries on MembershipRepository
 ├── service/      Business logic — auth, schools, classrooms, invites, household dashboard, pools
-│                 + requirements, household inventory, the Redis-backed session/magic-link stores,
-│                 email boundary
+│                 + requirements, household inventory, surplus contributions, the Redis-backed
+│                 session/magic-link stores, email boundary
 ├── security/     Cookie-based session auth filter + cookie read/write helper
 ├── config/       SecurityConfig (filter chain, public-endpoint allowlist), OAuth2Config
 ├── dto/          Request/response records matching contracts/openapi.yaml's schemas exactly

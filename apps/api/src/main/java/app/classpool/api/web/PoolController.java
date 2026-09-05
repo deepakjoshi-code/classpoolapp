@@ -1,11 +1,14 @@
 package app.classpool.api.web;
 
+import app.classpool.api.dto.ContributionResponse;
 import app.classpool.api.dto.CreateRequirementRequest;
 import app.classpool.api.dto.InventoryLineResponse;
 import app.classpool.api.dto.InventorySummaryResponse;
+import app.classpool.api.dto.OfferContributionRequest;
 import app.classpool.api.dto.PoolDetailResponse;
 import app.classpool.api.dto.RequirementResponse;
 import app.classpool.api.dto.SetInventoryRequest;
+import app.classpool.api.service.ContributionService;
 import app.classpool.api.service.InventoryService;
 import app.classpool.api.service.PoolService;
 import app.classpool.api.service.RequirementService;
@@ -24,12 +27,14 @@ public class PoolController {
     private final PoolService poolService;
     private final RequirementService requirementService;
     private final InventoryService inventoryService;
+    private final ContributionService contributionService;
 
     public PoolController(PoolService poolService, RequirementService requirementService,
-                           InventoryService inventoryService) {
+                           InventoryService inventoryService, ContributionService contributionService) {
         this.poolService = poolService;
         this.requirementService = requirementService;
         this.inventoryService = inventoryService;
+        this.contributionService = contributionService;
     }
 
     @GetMapping("/{poolId}")
@@ -80,5 +85,39 @@ public class PoolController {
     public InventorySummaryResponse getInventorySummary(@AuthenticationPrincipal UUID callerUserId,
                                                           @PathVariable UUID poolId) {
         return inventoryService.getSummary(callerUserId, poolId);
+    }
+
+    @PostMapping("/{poolId}/requirements/{requirementId}/contributions")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ContributionResponse offerContribution(@AuthenticationPrincipal UUID callerUserId,
+                                                    @PathVariable UUID poolId, @PathVariable UUID requirementId,
+                                                    @Valid @RequestBody OfferContributionRequest request) {
+        return contributionService.offer(callerUserId, poolId, requirementId, request);
+    }
+
+    @GetMapping("/{poolId}/contributions/mine")
+    public List<ContributionResponse> getMyContributions(@AuthenticationPrincipal UUID callerUserId,
+                                                            @PathVariable UUID poolId) {
+        return contributionService.getMine(callerUserId, poolId);
+    }
+
+    @DeleteMapping("/{poolId}/contributions/{contributionId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void withdrawContribution(@AuthenticationPrincipal UUID callerUserId, @PathVariable UUID poolId,
+                                      @PathVariable UUID contributionId) {
+        contributionService.withdraw(callerUserId, poolId, contributionId);
+    }
+
+    @GetMapping("/{poolId}/contributions")
+    public List<ContributionResponse> listContributionsForOrganizer(@AuthenticationPrincipal UUID callerUserId,
+                                                                       @PathVariable UUID poolId) {
+        return contributionService.listForOrganizer(callerUserId, poolId);
+    }
+
+    @PostMapping("/{poolId}/contributions/{contributionId}/receive")
+    public ContributionResponse markContributionReceived(@AuthenticationPrincipal UUID callerUserId,
+                                                            @PathVariable UUID poolId,
+                                                            @PathVariable UUID contributionId) {
+        return contributionService.markReceived(callerUserId, poolId, contributionId);
     }
 }
