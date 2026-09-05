@@ -4,9 +4,10 @@ Spring Boot 3 / Java 21 backend implementing `contracts/openapi.yaml`'s Phase 1 
 Phase 2 (schools/classes/memberships), Phase 3 (pools + manual requirements, no AI yet),
 Phase 4 (household inventory — "Shop Your Home First"), Phase 5 (surplus contribution pool),
 Phase 6/7 (allocation & residual-demand engine), Phase 8 (bulk pack optimizer / purchase plan),
-Phase 9 (Stripe Express onboarding + per-household payment collection), and Phase 10 (ordering,
-physical distribution, and Class Reserve) surface — see `ARCHITECTURE.md` §4 and `docs/PRD.md`
-§17.3 for the build-order this corresponds to.
+Phase 9 (Stripe Express onboarding + per-household payment collection), Phase 10 (ordering,
+physical distribution, and Class Reserve), and Phase 11 (AI-assisted requirement import from
+pasted text) surface — see `ARCHITECTURE.md` §4 and `docs/PRD.md` §17.3 for the build-order this
+corresponds to.
 
 ## Running locally
 
@@ -714,8 +715,9 @@ skip directly against a two-student fixture, one self-fulfilled and one not.
 **Class Reserve is scoped to `classroom_id`, never `school_id`, per this task's explicit
 instruction** — `class_reserve.school_id` (the stranded-reserve donate-up case, PRD §9.4/§13.1's
 later update) is left unmapped on `ClassReserveEntry`, the same "don't map what this phase doesn't
-populate" instinct as `Contribution`'s unmapped `return_due_date`/`Requirement`'s unmapped
-`requirement_source_id`. `getClassReserve` reads every entry for the classroom, not just this
+populate" instinct as `Contribution`'s unmapped `return_due_date` (`Requirement.requirementSourceId`
+was in this same unmapped state through Phase 10 — Phase 11 is what finally populates it, see its
+own design notes below). `getClassReserve` reads every entry for the classroom, not just this
 pool's own — Class Reserve is a classroom-level concept the contract describes multiple pools
 contributing to over time, even though in practice this phase is its first appearance so today
 it's always just one pool's entries.
@@ -758,6 +760,104 @@ other transition added by a prior phase, nothing outside `PoolService` needs to 
 organizer-check-then-state-check-then-transition shape is identical to `PoolService.confirm`'s, so
 it lives right alongside it.
 
+## AI ingestion (Phase 11) design notes
+
+New surface, in its own `RequirementSourceController` (`POST/GET /pools/{poolId}/requirement-sources`)
+rather than `PoolController` (already 147 lines before these two routes, the same size-driven
+judgment call every controller split since Phase 8 has made) — delegating to a new
+`RequirementImportService`/`RequirementSource` entity over the V1 migration's already-present
+`requirement_source` table, and a new `requirement_source_id` mapping on the existing `Requirement`
+entity (the column already existed in V1; Phase 3 left it deliberately unmapped since manual entry
+had nothing to point it at — see `Requirement`'s Javadoc). **No new migration** — same "the table
+already has exactly the columns the contract needs" situation as Phase 8's `ProductOffer`/
+`PurchasePlan` tables.
+
+**The `AiExtractionGateway` boundary — this phase's real architectural decision, deliberately
+modeled on Phase 9's `StripeGateway`.** There is no Anthropic API key provisioned for this Spring
+Boot app to call at runtime (a completely separate concern from the coding assistant's own model
+access) — so all AI interaction goes through `service/AiExtractionGateway.java`, an interface with
+exactly one registered implementation, `StubAiExtractionGateway` (`@Component`, same pattern as
+`EmailSender`/`LoggingEmailSender` and `StripeGateway`/`StubStripeGateway`): one method,
+`extract(String rawText) -> List<ExtractedRequirement>`. A later phase swaps in a real
+implementation backed by a Claude API call — e.g. the Anthropic Java SDK, with the
+`ExtractedRequirement` record's shape (`name`, `quantityPerStudent`, `brand`, `strictness`,
+`sourceEvidence`, `confidence`) expressed as a tool-use (function-calling) schema so the model
+returns structured JSON rather than free text, per PRD §15's document-understanding step — and
+**nothing** in `RequirementImportService`, `RequirementSourceController`, or the OpenAPI contract
+needs to change; the interface's own Javadoc documents exactly what a real implementation would do.
+
+**The stub is a genuine, deterministic, fully-unit-tested regex/dictionary heuristic — not a
+hardcoded fixture, and not an LLM.** Per line of pasted text: strip a leading bullet/dash and
+reject outright anything too short or that reads as a greeting/sign-off; find a quantity (first
+explicit digit, or — failing that — a small word-number dictionary: "a dozen", "a couple",
+"several", "two", ...; no quantity signal at all means the line produces nothing, which is also
+what naturally screens out non-item lines with no digits); classify strictness from trigger phrases
+("any brand"/"generic" → `GENERIC`, "exactly"/"must be" → `EXACT`, otherwise
+`EQUIVALENT_ALLOWED`); pull a brand from an explicit `brand: X` label or a capitalized,
+non-sentence-initial word left over after every quantity/filler/parenthetical is stripped (never
+guessed if no such word exists); whatever remains becomes the item name. Confidence starts at 0.9
+and is reduced for each ambiguity signal actually observed (quantity was word-based rather than an
+explicit digit, more than one number in the line, more than one brand-like candidate, an unusually
+short or long line), floored at 0.4 and capped at 0.97 — this stub never claims 1.0 certainty, and
+it never fabricates a requirement for a line with no plausible quantity or no leftover item name
+(PRD §15's AI safety rule: "AI may interpret messy text but must never silently invent a
+requirement"). `StubAiExtractionGatewayTest` exercises this against a realistic multi-line pasted
+email (clean lines, messy word-quantity lines, an explicit "must be exactly" line, a line with two
+numbers, and greeting/sign-off lines that correctly produce nothing), asserting quantities, brand
+presence/absence, strictness, and that confidence is measurably lower for the ambiguous lines than
+the clean ones.
+
+**Honest limitations, stated plainly (not glossed over).** This is regex-and-dictionary matching,
+not language understanding. It will misparse real-world phrasing a real LLM would handle
+correctly: multi-item lines ("2 pencils and a notebook" — only ever yields one candidate per line,
+by construction), quantities as ranges ("10-12 markers" — takes the first number, 10), item names
+that themselves contain a digit or a capitalized word with no brand meaning, non-English text, or a
+supply list written as flowing prose rather than one item per line. This is the accepted trade-off
+for a deterministic, dependency-free, fully-testable stand-in behind the exact interface a real
+model call can later replace — flagged here rather than overstated.
+
+**The 0.85 confidence threshold (`RequirementImportService.CONFIDENCE_THRESHOLD`) is the contract's
+own number** (`importRequirementsFromText`'s summary), applied inclusively — a line scoring exactly
+0.85 is created `EXTRACTED`, not `NEEDS_REVIEW` (`RequirementImportServiceTest`'s boundary test
+covers 0.85 and 0.849 on either side). It was picked by the contract, not this phase, precisely
+because the stub's own confidence scale is calibrated against it: a clean, single-digit-quantity,
+single-brand-candidate line scores 0.9 (above threshold, i.e. "AI is confident enough to skip
+manual review, though the organizer must still confirm it like every requirement"), while any
+single ambiguity signal (a word-based quantity, a second number in the line, more than one
+brand-like candidate, or an unusually short/long line) drops it to 0.65-0.8 (below threshold, i.e.
+"the organizer should look at this one before confirming"). `EXTRACTED` is never a bypass of
+organizer verification either way — `PoolService.confirm` still requires every requirement,
+`EXTRACTED` or `NEEDS_REVIEW`, to be confirmed before a pool can leave `DRAFT` (PRD §3.3: "nothing
+is financially actionable until a human organizer verifies"), exactly as it already did for
+Phase 3's manual entries — `RequirementImportIntegrationTest` proves an imported pool's
+`EXTRACTED`/`NEEDS_REVIEW` requirements confirm cleanly through the existing, unmodified confirm
+endpoint.
+
+**Zero extractions is a valid 201, not an error** — per the contract's own wording, a pasted email
+with nothing recognizable still creates its `RequirementSource` row (an audit trail of what was
+submitted) and returns `{ source, requirements: [] }`; the organizer can see what was pasted and
+add items manually instead, the same "manual entry stays available indefinitely" principle running
+through the whole contract. `RequirementImportServiceTest`/`RequirementImportIntegrationTest` both
+cover this directly rather than only testing the successful-extraction path.
+
+**The file-upload gap — not built in this phase, per the contract's own note.** `RequirementSource`
+maps `s3_key` but Phase 11 never sets it to anything but `null`: there is no S3/object-storage
+access in this sandbox, so `PDF`/`PHOTO`/`SCREENSHOT`/`WORD_DOC` sources (the other four values of
+`RequirementSourceType`, laid down in full to match the V1 migration's check constraint, same
+instinct as every other enum in this codebase) are not implemented — `importRequirementsFromText`
+only accepts `PASTED_EMAIL`/`PASTED_PORTAL`/`PASTED_MESSAGE`, rejecting anything else (including a
+syntactically valid but disallowed-for-this-endpoint `PDF`) with 400. A later phase adding file
+upload needs object storage credentials and a real OCR/document-parsing step before
+`AiExtractionGateway.extract` (or an equivalent image-aware variant) can run on the result — out of
+scope here for the identical reason `StripeGateway`/`EmailSender` are stubbed.
+
+**Manual entry (`RequirementService.add`) is untouched, on purpose.** `RequirementService.add`
+still creates a `Requirement` with `requirementSourceId = null` exactly as Phase 3 left it — it was
+checked first, per this task's own instruction, and retrofitting it to also create a `MANUAL`-type
+`RequirementSource` row would touch already-shipped, already-tested Phase 3 behavior for no
+contract-required benefit (nothing reads a `MANUAL` source row anywhere in the contract). Flagged
+here rather than silently done or silently skipped.
+
 ## Package layout
 
 ```
@@ -766,8 +866,9 @@ app.classpool.api
 │                 Classroom, Membership, Invite), Phase 3 (Pool, Requirement), Phase 4
 │                 (ParentInventory), Phase 5 (Contribution), Phase 6/7 (AllocationLine,
 │                 ResidualDemandLine), Phase 8 (ProductOffer, PurchasePlan, PurchasePlanLine),
-│                 Phase 9 (OrganizerStripeAccount, Payment), and Phase 10 (Order, OrderLine,
-│                 DistributionBatch, DistributionItem, ClassReserveEntry) tables, plus enums
+│                 Phase 9 (OrganizerStripeAccount, Payment), Phase 10 (Order, OrderLine,
+│                 DistributionBatch, DistributionItem, ClassReserveEntry), and Phase 11
+│                 (RequirementSource) tables, plus enums
 ├── repository/   Spring Data JPA repositories, including the native pg_trgm dedup queries and the
 │                 shared organizer-role / confirmed-student-count / join-order queries on
 │                 MembershipRepository
@@ -775,8 +876,9 @@ app.classpool.api
 │                 + requirements, household inventory, surplus contributions, the allocation &
 │                 residual-demand engine, the bulk-pack optimizer (PurchasePlanService +
 │                 PackOptimizer), Stripe onboarding + payment collection (PaymentService), ordering
-│                 + physical distribution (OrderService, DistributionService), the stubbed
-│                 StripeGateway boundary, the Redis-backed session/magic-link stores, email
+│                 + physical distribution (OrderService, DistributionService), AI-assisted
+│                 requirement import (RequirementImportService), the stubbed StripeGateway/
+│                 AiExtractionGateway boundaries, the Redis-backed session/magic-link stores, email
 │                 boundary
 ├── security/     Cookie-based session auth filter + cookie read/write helper
 ├── config/       SecurityConfig (filter chain, public-endpoint allowlist), OAuth2Config
