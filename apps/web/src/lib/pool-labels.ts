@@ -1,4 +1,4 @@
-import type { Contribution, Pool, Requirement } from "./api/types";
+import type { AllocationStatus, Contribution, Pool, Requirement } from "./api/types";
 
 /**
  * Plain-language strictness copy for parents/organizers (PRD §3.3: "Modes:
@@ -87,4 +87,54 @@ export const CONTRIBUTION_STATE_LABELS: Record<Contribution["state"], string> = 
 
 export function contributionStateLabel(state: Contribution["state"]): string {
   return CONTRIBUTION_STATE_LABELS[state] ?? state;
+}
+
+/**
+ * States a pool passes through *before* `POST /pools/{poolId}/reconcile`
+ * (PRD §6's allocation & residual-demand engine) has been run. Used to gate
+ * both the one-way "work out what still needs buying" action (shown only
+ * while the pool is still `OPEN_FOR_INVENTORY`, the one state the contract's
+ * reconcile endpoint accepts) and the two read-only allocation views (shown
+ * only once reconcile has produced something for them to show).
+ */
+const POOL_STATES_BEFORE_RECONCILING: ReadonlySet<Pool["state"]> = new Set([
+  "DRAFT",
+  "OPEN_FOR_INVENTORY",
+  "OPEN_FOR_CONTRIBUTIONS",
+]);
+
+export function hasReconciled(state: Pool["state"]): boolean {
+  return !POOL_STATES_BEFORE_RECONCILING.has(state);
+}
+
+/**
+ * Plain-language status copy for one (requirement, student) allocation
+ * outcome (PRD §6's engine — described here without its internal "residual
+ * demand"/"allocation engine" names, which are jargon for an organizer or
+ * parent reading this). Shared, identical wording between the organizer's
+ * per-student breakdown and a household's own "my allocation" view — same
+ * "one sentence, reused verbatim across surfaces" approach as
+ * `CONTRIBUTION_STATE_LABELS` above, rather than two independently-worded
+ * copies of the same fact that could drift apart.
+ *
+ * `purchaseNeeded` (typically `AllocationLine.purchaseRequiredQuantity`) lets
+ * the `PURCHASE_REQUIRED` case name the actual shortfall — the only status
+ * where a bare label would omit the number that makes the copy useful;
+ * `SELF_FULFILLED`/`POOL_FULFILLED` need no such number, since nothing
+ * further is being asked of the family either way.
+ */
+export const ALLOCATION_STATUS_LABELS: Record<AllocationStatus, string> = {
+  SELF_FULFILLED: "Already has enough",
+  POOL_FULFILLED: "Covered by donated supplies",
+  PURCHASE_REQUIRED: "Will be part of the class purchase",
+};
+
+export function allocationStatusLabel(
+  status: AllocationStatus,
+  purchaseNeeded?: number
+): string {
+  if (status === "PURCHASE_REQUIRED" && typeof purchaseNeeded === "number") {
+    return `Still needs ${purchaseNeeded} — will be part of the class purchase`;
+  }
+  return ALLOCATION_STATUS_LABELS[status] ?? status;
 }

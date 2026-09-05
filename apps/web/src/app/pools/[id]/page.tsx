@@ -6,12 +6,15 @@ import { api } from "@/lib/api/client";
 import type { PoolDetail } from "@/lib/api/types";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { setPendingRedirect } from "@/lib/pending-redirect";
-import { poolStateLabel } from "@/lib/pool-labels";
+import { hasReconciled, poolStateLabel } from "@/lib/pool-labels";
 import { RequirementForm } from "@/components/RequirementForm";
 import { RequirementListItem } from "@/components/RequirementListItem";
 import { ConfirmPoolAction } from "@/components/ConfirmPoolAction";
 import { InventorySummaryPanel } from "@/components/InventorySummaryPanel";
 import { OrganizerContributionsPanel } from "@/components/OrganizerContributionsPanel";
+import { ReconcileAction } from "@/components/ReconcileAction";
+import { OrganizerAllocationPanel } from "@/components/OrganizerAllocationPanel";
+import { MyAllocationPanel } from "@/components/MyAllocationPanel";
 
 type LoadState =
   | { status: "loading" }
@@ -166,6 +169,24 @@ export default function PoolDetailPage() {
         <div className="mt-4 space-y-4">
           <InventorySummaryPanel poolId={pool.id} />
           <OrganizerContributionsPanel poolId={pool.id} />
+        </div>
+      )}
+
+      {isOrganizer && pool.state === "OPEN_FOR_INVENTORY" && (
+        <div className="mt-4">
+          <ReconcileAction
+            poolId={pool.id}
+            onReconciled={() =>
+              updatePool((prev) => ({ ...prev, state: "RECONCILING" }))
+            }
+          />
+        </div>
+      )}
+
+      {hasReconciled(pool.state) && (
+        <div className="mt-4 space-y-4">
+          {isOrganizer && <OrganizerAllocationPanel poolId={pool.id} />}
+          <MyAllocationPanel poolId={pool.id} />
         </div>
       )}
 

@@ -47,6 +47,19 @@ export type InventorySummary = DeepRequired<Schemas["InventorySummary"]>;
 export type Contribution = DeepRequired<Schemas["Contribution"]>;
 
 /**
+ * The allocation & residual-demand engine's output (PRD §6) — the frozen
+ * result of `POST /pools/{poolId}/reconcile`, also fetched by
+ * `GET .../allocation` (organizer) and `.../allocation/mine` (caller's own
+ * students). `AllocationStatus` is a plain string union (not an object
+ * schema), so `DeepRequired` doesn't apply to it — there's nothing on it to
+ * narrow.
+ */
+export type AllocationStatus = Schemas["AllocationStatus"];
+export type AllocationLine = DeepRequired<Schemas["AllocationLine"]>;
+export type ResidualDemandLine = DeepRequired<Schemas["ResidualDemandLine"]>;
+export type AllocationSummary = DeepRequired<Schemas["AllocationSummary"]>;
+
+/**
  * Request body type — left exactly as generated. Unlike the responses above,
  * this one already carries a real `required:` list in the contract
  * (schoolYearLabel, grade, teacherLabel), and the rest (schoolId vs.

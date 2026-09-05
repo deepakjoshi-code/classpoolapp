@@ -3,9 +3,11 @@
 Next.js 15 (App Router) + TypeScript PWA for ClassPool's parent/organizer-facing
 frontend. Covers Phase 1 (PWA shell + auth), Phase 2 (schools/classes/
 memberships), Phase 3 (pools + manual requirement ingestion/verification),
-Phase 4 (household inventory — "Shop Your Home First"), and Phase 5
-(contribution pool — offer/withdraw surplus, organizer receive confirmation)
-of the V1 build order — see `../../ARCHITECTURE.md` §4 and
+Phase 4 (household inventory — "Shop Your Home First"), Phase 5
+(contribution pool — offer/withdraw surplus, organizer receive confirmation),
+and Phase 6 (allocation & residual demand — organizer "work out what still
+needs buying" action, organizer purchase breakdown, household's own status
+view) of the V1 build order — see `../../ARCHITECTURE.md` §4 and
 `../../docs/PRD.md` §17.3.
 
 ## Running it
@@ -103,6 +105,25 @@ Component tests live in `src/tests/` (Vitest + React Testing Library), per
   itself — is never called; for the organizer, it asserts the same panel and
   data ARE rendered, so the parent-side assertion is proven to be a real
   role gate and not just an always-off component.
+- `ReconcileAction.test.tsx` — the organizer's one-way "work out what still
+  needs buying" action (PRD §6): asserts `POST /pools/{id}/reconcile` is
+  unreachable without first passing through the "this can't be undone" step,
+  that cancelling that step backs out without calling the API, that success
+  calls `onReconciled` with the returned `AllocationSummary`, and that the
+  already-reconciled 409 and a generic failure render distinct messages.
+- `OrganizerAllocationPanel.test.tsx` — the organizer's purchase-breakdown
+  view: fetches `GET /pools/{id}/allocation` and renders each requirement's
+  residual-demand line ("N still need(s) to be purchased", or "Fully
+  covered!" at zero) plus its per-student breakdown using
+  `allocationStatusLabel`, asserts no raw `AllocationStatus` enum value is
+  ever rendered, and handles the not-yet-reconciled 409 with a message
+  instead of crashing (reachable only via a stale page state, since the pool
+  detail page's own gating should prevent it in normal use).
+- `MyAllocationPanel.test.tsx` — the household's own "where things stand"
+  view: fetches `GET /pools/{id}/allocation/mine` and renders only the
+  plain-language status per (requirement, student) — never a raw enum
+  value — and treats an empty array (reconcile hasn't run yet) as a normal
+  empty state, not an error.
 
 ## API client — generated from the contract
 
@@ -171,9 +192,23 @@ local inventory edits" — not yet built, out of scope for Phase 1-2).
 | `/classrooms/[id]/invite` | Join link + QR + one-tap share, shown right after creation |
 | `/join/[token]` | Public, pre-auth invite landing page → sign-in → student-name join step |
 | `/classrooms/[id]/pools/new` | Organizer/co-organizer only: name a pool ("Fall Supplies") and start it in `DRAFT` |
-| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4) |
+| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4). While the pool is `OPEN_FOR_INVENTORY`, an organizer also sees `ReconcileAction` — the one-way "work out what still needs buying" step. Once the pool has moved past that (`RECONCILING` or later), everyone sees `MyAllocationPanel` (their own household's status) and an organizer additionally sees `OrganizerAllocationPanel` (the full purchase breakdown) (Phase 6) |
 | `/pools/[id]/inventory` | "Shop Your Home First" (PRD §4) — the caller's own household inventory checklist: one +/- stepper row per (requirement, student) they have in this classroom (Phase 4) |
 | `/pools/[id]/contribute` | "Offer surplus" (PRD §5.1) — the caller's own pledge screen: one offer card per (requirement, student) they have in this classroom, showing their own pledge status and a withdraw action while still `PLEDGED`. Linked from `/pools/[id]` once the pool is past `DRAFT`, alongside (but visually secondary to, per the "optional/low-pressure" framing) the inventory link (Phase 5). The organizer's confirmation view is not a page — it's `OrganizerContributionsPanel`, embedded directly on `/pools/[id]` next to the inventory summary, same as Phase 4 |
+
+Phase 6's allocation views are all embedded directly on `/pools/[id]`, not
+separate pages — same pattern as Phase 4's `InventorySummaryPanel` and
+Phase 5's `OrganizerContributionsPanel`. Copy throughout avoids the PRD's
+internal "residual demand"/"allocation engine" terms (§6) in favor of plain
+language ("work out what still needs to be bought") for both the organizer
+action and the two read views (`OrganizerAllocationPanel`,
+`MyAllocationPanel`). `allocationStatusLabel` in `src/lib/pool-labels.ts`
+is the single source of per-status wording, reused identically by both
+read views (same "one sentence, reused verbatim across surfaces" approach
+as `contributionStateLabel`) — it takes an optional purchase-quantity
+argument so the `PURCHASE_REQUIRED` case can name the actual shortfall
+("Still needs 2 — will be part of the class purchase"), which a bare
+`Record<AllocationStatus, string>` lookup can't express on its own.
 
 ## Known discrepancies / assumptions against the contract
 
