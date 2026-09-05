@@ -3,11 +3,12 @@ info:
   title: ClassPool API
   version: "0.1.0"
   description: >
-    Phase 1 (PWA shell + auth), Phase 2 (schools/classes/memberships), and
-    Phase 3 (manual requirements — no AI yet) of the V1 build order — see
-    ARCHITECTURE.md §4 and docs/PRD.md §17.3. Source of truth for both
-    apps/api (implements this) and apps/web (generates its TS client from
-    this via openapi-typescript).
+    Phase 1 (PWA shell + auth), Phase 2 (schools/classes/memberships),
+    Phase 3 (manual requirements — no AI yet), Phase 4 (household
+    inventory), and Phase 5 (contribution pool) of the V1 build order —
+    see ARCHITECTURE.md §4 and docs/PRD.md §17.3. Source of truth for
+    both apps/api (implements this) and apps/web (generates its TS
+    client from this via openapi-typescript).
 servers:
   - url: /api/v1
 
@@ -455,6 +456,118 @@ paths:
               schema: { $ref: "#/components/schemas/InventorySummary" }
         "403": { description: Caller is not an organizer on this pool's classroom }
 
+  /pools/{poolId}/requirements/{requirementId}/contributions:
+    post:
+      operationId: offerContribution
+      summary: >
+        A parent pledges surplus of this requirement to the class (PRD §5.1
+        "Offer surplus" / §5.4 contribution lifecycle — starts `PLEDGED`).
+        V1 only supports `DONATE` (Give) — `LEND`/`SELL` are explicitly
+        "later" per PRD §5.1; requesting them returns 400. `quantity` is the
+        household's own independent declaration of how much extra they
+        have to give — it is not derived from, or clamped by, their
+        Phase 4 inventory answer (owning more than required and being
+        willing to give some away are two separate facts). Caller must have
+        a Membership on this classroom for the given `studentId`, same
+        per-student authorization boundary as Phase 4's inventory PUT.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - $ref: "#/components/parameters/RequirementId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [studentId, quantity]
+              properties:
+                studentId: { type: string, format: uuid }
+                quantity: { type: integer, minimum: 1 }
+                mode: { type: string, enum: [DONATE], default: DONATE }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Contribution" }
+        "400": { description: "Unsupported mode (only DONATE in V1)" }
+        "403": { description: "Caller has no Membership on this classroom for that student" }
+
+  /pools/{poolId}/contributions/mine:
+    get:
+      operationId: getMyContributions
+      summary: The caller's own pledged/received contributions across this pool.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Contribution" }
+        "403": { description: Caller has no Membership on this pool's classroom }
+
+  /pools/{poolId}/contributions/{contributionId}:
+    delete:
+      operationId: withdrawContribution
+      summary: >
+        The offering parent withdraws their own pledge before it's been
+        marked received (contract: only valid while `state = PLEDGED` —
+        409 otherwise, since a RECEIVED contribution has already
+        physically changed hands per PRD §5.4).
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - $ref: "#/components/parameters/ContributionId"
+      responses:
+        "204": { description: Withdrawn }
+        "403": { description: Caller does not own this contribution }
+        "409": { description: "Contribution is already RECEIVED — cannot withdraw" }
+
+  /pools/{poolId}/contributions:
+    get:
+      operationId: listContributionsForOrganizer
+      summary: >
+        Every contribution pledged/received across this pool, for the
+        organizer's confirmation workflow (PRD §12.3: "View unreceived
+        contributions"). Organizer/co-organizer only — includes the
+        offering household's identity, per PRD §5.3's privacy model
+        ("the organizer can see contributor identity when necessary for
+        drop-off coordination").
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Contribution" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+
+  /pools/{poolId}/contributions/{contributionId}/receive:
+    post:
+      operationId: markContributionReceived
+      summary: >
+        Organizer confirms a pledged contribution has physically arrived
+        (PRD §5.4: `PLEDGED → RECEIVED`). Only confirmed/received surplus
+        counts toward reducing the class's residual demand (§6.1) — a
+        still-`PLEDGED` contribution never does. Organizer/co-organizer
+        only. 409 if the contribution is already `RECEIVED`.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - $ref: "#/components/parameters/ContributionId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Contribution" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: Contribution is already RECEIVED }
+
   /household/dashboard:
     get:
       operationId: getHouseholdDashboard
@@ -491,6 +604,11 @@ components:
       schema: { type: string, format: uuid }
     RequirementId:
       name: requirementId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ContributionId:
+      name: contributionId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -672,3 +790,20 @@ components:
                 type: integer
                 nullable: true
                 description: Same as Requirement.totalDemand — null if the pool isn't confirmed yet.
+
+    Contribution:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        requirementId: { type: string, format: uuid }
+        requirementName: { type: string }
+        studentId: { type: string, format: uuid }
+        studentFirstName: { type: string }
+        offeringParentDisplayName:
+          type: string
+          description: Only ever present to the organizer's own listing endpoint (PRD §5.3 privacy model) — omitted from the offering parent's own "mine" view, where it would be redundant, and never exposed to other parents.
+          nullable: true
+        quantity: { type: integer }
+        mode: { type: string, enum: [DONATE] }
+        state: { type: string, enum: [PLEDGED, RECEIVED] }
+        createdAt: { type: string, format: date-time }
