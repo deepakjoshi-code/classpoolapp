@@ -925,6 +925,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/notifications/mine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's own notifications (PRD §11.3's event list), newest first. V1 only emits `PAYMENT_DUE` (Phase 9's generatePayments), `BUNDLE_READY` (Phase 10's generateDistribution), and `POOL_COMPLETED` (Phase 10's completePool) — every other event type in the enum is laid down for a later phase to start emitting, same "full enum, partial emission" pattern as `PoolState`/ `RequirementState`. Delivered in-app only (`channel = PUSH` conceptually, but no real Web Push subscription/VAPID infrastructure exists in this environment — see apps/api/README.md); email/SMS fan-out is a documented gap, not built. */
+        get: operations["getMyNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/{notificationId}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Caller marks their own notification read. Idempotent — calling again on an already-read notification just returns it unchanged, no error. */
+        post: operations["markNotificationRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/savings-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The shareable "how much this pool saved" result (PRD §16.3's viral loop — "Grade 1 saved $1,118 and reused 397 items with ClassPool"). `itemsReused` sums every AllocationLine's `ownedQuantity + poolFulfilledQuantity` (self-owned or community-donated — never bought new); `itemsPurchased` sums `purchaseRequiredQuantity`. `estimatedSavingsCents` approximates "what those reused items would have cost new" using this same pool's own average actual per-unit purchase price as the only real price signal available in V1 (no independent retail-price catalog exists) — `0` if no purchase plan exists yet for this pool, since there's no price signal to estimate from. Any member of this pool's classroom may view it (it's meant to be shared). Requires the pool to have been reconciled (Phase 6/7) — 409 otherwise, since `itemsReused`/`itemsPurchased` come from that snapshot. */
+        get: operations["getSavingsSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/household/dashboard": {
         parameters: {
             query?: never;
@@ -1349,6 +1400,33 @@ export interface components {
         RequirementImportResult: {
             source?: components["schemas"]["RequirementSource"];
             requirements?: components["schemas"]["Requirement"][];
+        };
+        Notification: {
+            /** Format: uuid */
+            id?: string;
+            /**
+             * @description PRD §11.3's full event list. V1 only ever emits PAYMENT_DUE, BUNDLE_READY, and POOL_COMPLETED — the rest are laid down for later phases.
+             * @enum {string}
+             */
+            type?: "CLASS_INVITE" | "NEW_POOL" | "INVENTORY_COMPLETE" | "CONTRIBUTION_ALLOCATED" | "REUSE_PERIOD_ENDING" | "PAYMENT_DUE" | "PURCHASE_COMPLETED" | "BUNDLE_READY" | "POOL_COMPLETED" | "LEND_ITEM_DUE_BACK";
+            /** Format: uuid */
+            poolId?: string | null;
+            /** @description Plain-language */
+            message?: string;
+            /** Format: date-time */
+            readAt?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        SavingsSummary: {
+            /** Format: uuid */
+            poolId?: string;
+            poolName?: string;
+            itemsReused?: number;
+            itemsPurchased?: number;
+            estimatedSavingsCents?: number;
+            /** @description Ready-to-share plain text (PRD §16.3), e.g. "\"Fall Supplies\" reused 12 items and saved an estimated $46.47 with ClassPool!" — omits the dollar clause when estimatedSavingsCents is 0 (no purchase plan yet). */
+            shareableMessage?: string;
         };
     };
     responses: never;
@@ -3344,6 +3422,98 @@ export interface operations {
                 content?: never;
             };
             /** @description Pool is not DRAFT */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getMyNotifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Notification"][];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    markNotificationRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                notificationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Notification"];
+                };
+            };
+            /** @description Caller does not own this notification */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getSavingsSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavingsSummary"];
+                };
+            };
+            /** @description Caller has no Membership on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool hasn't been reconciled yet */
             409: {
                 headers: {
                     [name: string]: unknown;
