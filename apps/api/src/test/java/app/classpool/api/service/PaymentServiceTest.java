@@ -618,6 +618,102 @@ class PaymentServiceTest {
                 .isInstanceOf(ConflictException.class);
     }
 
+    // ==================== substitution top-up charges (Phase 10) ====================
+
+    @Test
+    void splitAmountByPurchaseShare_splitsProportionally_withExpectedRoundingDrift() {
+        UUID requirementId = UUID.randomUUID();
+        UUID studentA = UUID.randomUUID();
+        UUID studentB = UUID.randomUUID();
+        UUID studentC = UUID.randomUUID();
+        // Three households, evenly split need (1 unit each of 3 total) — 100 cents doesn't divide
+        // evenly by 3, so this also exercises the same accepted per-household rounding drift as
+        // computeHouseholdTotals (33 + 33 + 33 = 99, not 100).
+        when(allocationLineRepository.findByRequirementIdInOrderByRequirementIdAscStudentIdAsc(List.of(requirementId)))
+                .thenReturn(List.of(
+                        new AllocationLine(requirementId, studentA, 1, 0, 0, 1, AllocationStatus.PURCHASE_REQUIRED),
+                        new AllocationLine(requirementId, studentB, 1, 0, 0, 1, AllocationStatus.PURCHASE_REQUIRED),
+                        new AllocationLine(requirementId, studentC, 1, 0, 0, 1, AllocationStatus.PURCHASE_REQUIRED)));
+
+        UUID householdA = UUID.randomUUID();
+        UUID householdB = UUID.randomUUID();
+        UUID householdC = UUID.randomUUID();
+        Student a = newStudent(householdA);
+        setField(a, "id", studentA);
+        Student b = newStudent(householdB);
+        setField(b, "id", studentB);
+        Student c = newStudent(householdC);
+        setField(c, "id", studentC);
+        when(studentRepository.findAllById(any())).thenReturn(List.of(a, b, c));
+
+        Map<UUID, Integer> shares = paymentService.splitAmountByPurchaseShare(requirementId, 100);
+
+        assertThat(shares).hasSize(3);
+        assertThat(shares.get(householdA)).isEqualTo(33);
+        assertThat(shares.get(householdB)).isEqualTo(33);
+        assertThat(shares.get(householdC)).isEqualTo(33);
+        int grandTotal = shares.values().stream().mapToInt(Integer::intValue).sum();
+        assertThat(grandTotal).isNotEqualTo(100); // rounding drift vs the exact delta is expected
+        assertThat(grandTotal).isEqualTo(99);
+    }
+
+    @Test
+    void splitAmountByPurchaseShare_omitsAHousehold_whoseRoundedShareIsZero() {
+        UUID requirementId = UUID.randomUUID();
+        UUID studentBig = UUID.randomUUID();
+        UUID studentTiny = UUID.randomUUID();
+        when(allocationLineRepository.findByRequirementIdInOrderByRequirementIdAscStudentIdAsc(List.of(requirementId)))
+                .thenReturn(List.of(
+                        new AllocationLine(requirementId, studentBig, 999, 0, 0, 999, AllocationStatus.PURCHASE_REQUIRED),
+                        new AllocationLine(requirementId, studentTiny, 1, 0, 0, 1, AllocationStatus.PURCHASE_REQUIRED)));
+
+        UUID householdBig = UUID.randomUUID();
+        UUID householdTiny = UUID.randomUUID();
+        Student big = newStudent(householdBig);
+        setField(big, "id", studentBig);
+        Student tiny = newStudent(householdTiny);
+        setField(tiny, "id", studentTiny);
+        when(studentRepository.findAllById(any())).thenReturn(List.of(big, tiny));
+
+        // householdTiny's exact share is 100 * 1/1000 = 0.1, which rounds to 0 — skipped entirely.
+        Map<UUID, Integer> shares = paymentService.splitAmountByPurchaseShare(requirementId, 100);
+
+        assertThat(shares).hasSize(1);
+        assertThat(shares).containsOnlyKeys(householdBig);
+        assertThat(shares.get(householdBig)).isEqualTo(100);
+    }
+
+    @Test
+    void createTopUpPayments_createsOnePendingPaymentPerHousehold_reusingTheProportionalSplit() {
+        UUID poolId = UUID.randomUUID();
+        UUID requirementId = UUID.randomUUID();
+        UUID studentA = UUID.randomUUID();
+        UUID studentB = UUID.randomUUID();
+        when(allocationLineRepository.findByRequirementIdInOrderByRequirementIdAscStudentIdAsc(List.of(requirementId)))
+                .thenReturn(List.of(
+                        new AllocationLine(requirementId, studentA, 6, 0, 0, 6, AllocationStatus.PURCHASE_REQUIRED),
+                        new AllocationLine(requirementId, studentB, 3, 0, 0, 3, AllocationStatus.PURCHASE_REQUIRED)));
+        UUID householdA = UUID.randomUUID();
+        UUID householdB = UUID.randomUUID();
+        Student a = newStudent(householdA);
+        setField(a, "id", studentA);
+        Student b = newStudent(householdB);
+        setField(b, "id", studentB);
+        when(studentRepository.findAllById(any())).thenReturn(List.of(a, b));
+        when(paymentRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ArgumentCaptor<List<Payment>> captor = ArgumentCaptor.forClass(List.class);
+        List<Payment> created = paymentService.createTopUpPayments(poolId, requirementId, 90);
+
+        verify(paymentRepository).saveAll(captor.capture());
+        Map<UUID, Integer> byHousehold = captor.getValue().stream()
+                .collect(Collectors.toMap(Payment::getHouseholdId, Payment::getAmountCents));
+        assertThat(byHousehold.get(householdA)).isEqualTo(60); // 90 * 6/9
+        assertThat(byHousehold.get(householdB)).isEqualTo(30); // 90 * 3/9
+        assertThat(created).allSatisfy(p -> assertThat(p.getPoolId()).isEqualTo(poolId));
+        assertThat(created).allSatisfy(p -> assertThat(p.getState()).isEqualTo(PaymentState.PENDING));
+    }
+
     // ==================== fixtures ====================
 
     private void stubOrganizer(Pool pool) {

@@ -159,6 +159,42 @@ class PoolServiceTest {
         assertThat(response.requirements()).extracting("totalDemand").containsExactly(12, 6);
     }
 
+    // ---- complete (Phase 10) ----
+
+    @Test
+    void complete_throwsForbidden_whenCallerIsNotAnOrganizer() {
+        Pool pool = newPool(classroomId, PoolState.DISTRIBUTING);
+        when(poolRepository.findById(pool.getId())).thenReturn(Optional.of(pool));
+        when(membershipRepository.hasOrganizerRole(classroomId, callerId)).thenReturn(false);
+
+        assertThatThrownBy(() -> poolService.complete(callerId, pool.getId())).isInstanceOf(ForbiddenException.class);
+        verify(poolRepository, never()).save(any());
+    }
+
+    @Test
+    void complete_throwsConflict_whenPoolIsNotDistributing() {
+        Pool pool = newPool(classroomId, PoolState.ORDERED);
+        when(poolRepository.findById(pool.getId())).thenReturn(Optional.of(pool));
+        when(membershipRepository.hasOrganizerRole(classroomId, callerId)).thenReturn(true);
+
+        assertThatThrownBy(() -> poolService.complete(callerId, pool.getId())).isInstanceOf(ConflictException.class);
+        assertThat(pool.getState()).isEqualTo(PoolState.ORDERED);
+    }
+
+    @Test
+    void complete_movesDistributingToCompleted_withoutRequiringEveryItemDelivered() {
+        Pool pool = newPool(classroomId, PoolState.DISTRIBUTING);
+        when(poolRepository.findById(pool.getId())).thenReturn(Optional.of(pool));
+        when(membershipRepository.hasOrganizerRole(classroomId, callerId)).thenReturn(true);
+        when(requirementRepository.findByPoolIdOrderByCreatedAtAsc(pool.getId())).thenReturn(List.of());
+        when(poolRepository.save(any(Pool.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        PoolDetailResponse response = poolService.complete(callerId, pool.getId());
+
+        assertThat(pool.getState()).isEqualTo(PoolState.COMPLETED);
+        assertThat(response.state()).isEqualTo("COMPLETED");
+    }
+
     private static Pool newPool(UUID classroomId, PoolState state) {
         Pool pool = new Pool(classroomId, "Fall Supplies", "SUPPLIES");
         setId(pool, UUID.randomUUID());
