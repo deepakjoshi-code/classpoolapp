@@ -42,6 +42,21 @@ export type HouseholdDashboard = DeepRequired<Schemas["HouseholdDashboard"]>;
 export type Pool = DeepRequired<Schemas["Pool"]>;
 export type PoolDetail = DeepRequired<Schemas["PoolDetail"]>;
 export type Requirement = DeepRequired<Schemas["Requirement"]>;
+
+/**
+ * AI-assisted requirement import (PRD §3.1/§3.2, Phase 11) — the audit
+ * record `POST/GET /pools/{poolId}/requirement-sources` creates/lists, and
+ * the batch result the POST returns (the source record plus every
+ * `Requirement` it extracted, each already carrying its own
+ * `sourceEvidence`/`confidence`/`state`). Same `DeepRequired` narrowing as
+ * every other response type above. `RequirementSource.sourceType` widens
+ * past what an import request can send — `PDF`/`PHOTO`/`SCREENSHOT`/
+ * `WORD_DOC` are documented-but-not-yet-buildable source kinds (V1 only
+ * accepts pasted text) and `MANUAL` marks a requirement added via the plain
+ * add form, never a value this app sends itself.
+ */
+export type RequirementSource = DeepRequired<Schemas["RequirementSource"]>;
+export type RequirementImportResult = DeepRequired<Schemas["RequirementImportResult"]>;
 export type InventoryLine = DeepRequired<Schemas["InventoryLine"]>;
 export type InventorySummary = DeepRequired<Schemas["InventorySummary"]>;
 export type Contribution = DeepRequired<Schemas["Contribution"]>;

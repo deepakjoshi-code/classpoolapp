@@ -8,6 +8,7 @@ import type {
   Pool,
   PurchasePlan,
   Requirement,
+  RequirementSource,
 } from "./api/types";
 import { formatCents } from "./money";
 
@@ -43,6 +44,68 @@ export const STRICTNESS_OPTIONS: Array<{
 
 export function strictnessLabel(value: Requirement["strictness"]): string {
   return STRICTNESS_OPTIONS.find((o) => o.value === value)?.label ?? value;
+}
+
+/**
+ * Plain-language source-type copy for the AI-assisted import picker (PRD
+ * §3.1/§3.2, Phase 11) — `POST /pools/{poolId}/requirement-sources` only
+ * accepts these three (V1 is pasted-text-only; `PDF`/`PHOTO`/`SCREENSHOT`/
+ * `WORD_DOC`/`MANUAL` are other values `RequirementSource.sourceType` can
+ * carry but never ones an organizer picks when starting an import). Same
+ * "our own interpretation, not PRD-verbatim copy" caveat as
+ * `STRICTNESS_OPTIONS` above — see apps/web/README.md.
+ */
+export const REQUIREMENT_SOURCE_TYPE_OPTIONS: Array<{
+  value: "PASTED_EMAIL" | "PASTED_PORTAL" | "PASTED_MESSAGE";
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: "PASTED_EMAIL",
+    label: "Forwarded email",
+    hint: "A supply-list email from the teacher or school, pasted in as plain text.",
+  },
+  {
+    value: "PASTED_PORTAL",
+    label: "School portal text",
+    hint: "Text copied from a school or classroom portal page (e.g. a supply-list page).",
+  },
+  {
+    value: "PASTED_MESSAGE",
+    label: "Pasted message",
+    hint: "A message from a group chat, app, or elsewhere that mentions supplies.",
+  },
+];
+
+export function requirementSourceTypeLabel(
+  value: RequirementSource["sourceType"]
+): string {
+  return (
+    REQUIREMENT_SOURCE_TYPE_OPTIONS.find((o) => o.value === value)?.label ??
+    value
+  );
+}
+
+/**
+ * Plain-language confidence copy for one AI-extracted `Requirement` (PRD
+ * §3.1/§3.2, Phase 11's transparency requirement — "every extracted field
+ * retains source evidence"). Manual entries have `confidence: null` and
+ * never render this at all (see `RequirementListItem`). `state ===
+ * "NEEDS_REVIEW"` (below the API's confidence threshold) is treated as a
+ * real, distinct fact the organizer must attend to before confirming —
+ * never folded into the same "AI-extracted" wording as a
+ * `state === "EXTRACTED"` row, per the task's "make clear which items need
+ * attention" requirement.
+ */
+export function requirementNeedsReview(requirement: Requirement): boolean {
+  return requirement.state === "NEEDS_REVIEW";
+}
+
+export function requirementConfidenceLabel(requirement: Requirement): string {
+  const percent = Math.round((requirement.confidence ?? 0) * 100);
+  return requirementNeedsReview(requirement)
+    ? `Needs a closer look — ${percent}% confidence`
+    : `AI-extracted — ${percent}% confidence`;
 }
 
 export const POOL_STATE_LABELS: Record<Pool["state"], string> = {

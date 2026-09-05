@@ -15,6 +15,7 @@ import {
   poolStateLabel,
 } from "@/lib/pool-labels";
 import { RequirementForm } from "@/components/RequirementForm";
+import { ImportRequirementsForm } from "@/components/ImportRequirementsForm";
 import { RequirementListItem } from "@/components/RequirementListItem";
 import { ConfirmPoolAction } from "@/components/ConfirmPoolAction";
 import { InventorySummaryPanel } from "@/components/InventorySummaryPanel";
@@ -386,6 +387,29 @@ export default function PoolDetailPage() {
                     ...prev,
                     requirements: [...prev.requirements, created],
                     requirementCount: prev.requirementCount + 1,
+                  }))
+                }
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+            <h2 className="text-base font-semibold text-slate-900">
+              Or import from pasted text
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Paste a forwarded email, school portal text, or message and
+              we'll pull out candidate items for you to review — manual entry
+              above still works just as well.
+            </p>
+            <div className="mt-3">
+              <ImportRequirementsForm
+                poolId={pool.id}
+                onImported={(imported) =>
+                  updatePool((prev) => ({
+                    ...prev,
+                    requirements: [...prev.requirements, ...imported],
+                    requirementCount: prev.requirementCount + imported.length,
                   }))
                 }
               />

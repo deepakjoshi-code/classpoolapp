@@ -13,11 +13,14 @@ buy what's left" action, the generated plan with its running total and an
 approve step), Phase 9 (Stripe Connect payment collection — organizer
 bank-account onboarding, generating each household's payment, a household's
 own pay screen, cash fallback + refund, and the 90%-threshold finalize gate),
-and Phase 10 (ordering & distribution — organizer records the actual order
+Phase 10 (ordering & distribution — organizer records the actual order
 against the approved plan with optional per-line substitution editing,
 organizer sets up and prints per-household pick lists and tracks delivery,
 a household's own "what you're receiving" view, the class reserve ledger,
-and the final "close out this pool" step) of the V1 build order — see
+and the final "close out this pool" step), and Phase 11 (AI-assisted
+requirement import — organizer pastes a forwarded email/portal text/message
+and gets candidate requirements back with confidence + source evidence,
+alongside the permanent manual-entry path) of the V1 build order — see
 `../../ARCHITECTURE.md` §4 and `../../docs/PRD.md` §17.3.
 
 ## Running it
@@ -71,6 +74,26 @@ Component tests live in `src/tests/` (Vitest + React Testing Library), per
   `EXACT`/`EQUIVALENT_ALLOWED`/`GENERIC` enum values), submits an add via
   `POST`, edits via `PATCH` pre-filled with the existing values, and shows a
   specific message on the pool-no-longer-DRAFT 409.
+- `ImportRequirementsForm.test.tsx` — the AI-assisted pasted-text import form
+  (PRD §3.1/§3.2, Phase 11): asserts the source-type `<select>` shows the
+  three plain-language options (not the raw `PASTED_EMAIL`/`PASTED_PORTAL`/
+  `PASTED_MESSAGE` values), submits `POST .../requirement-sources` with the
+  exact `{ sourceType, rawText }` body, shows a results summary that counts
+  ready-to-review (`EXTRACTED`) and needs-a-closer-look (`NEEDS_REVIEW`)
+  items as distinct, worded-differently sentences (not one blended count),
+  calls `onImported` with the full batch, keeps submit disabled with no
+  pasted text, and shows distinct messages for the pool-no-longer-DRAFT 409
+  vs. a generic failure (the latter never calling `onImported`).
+- `RequirementListItem.test.tsx` — the requirement row's AI-provenance
+  display (Phase 11): a manual entry (`confidence: null`) renders no
+  confidence badge, no "AI-extracted"/"needs a closer look" text, and no
+  source-evidence disclosure at all; an `EXTRACTED` item and a
+  `NEEDS_REVIEW` item both show their confidence as a percentage but with
+  visibly/textually distinct wording ("AI-extracted — N% confidence" vs.
+  "Needs a closer look — N% confidence"); `sourceEvidence` is present in the
+  rendered output (inside an expandable disclosure) for either; and the
+  organizer's existing edit/remove controls still work alongside the new
+  provenance UI.
 - `ConfirmPoolAction.test.tsx` — the one-way confirm action: asserts the
   actual `POST /pools/{id}/confirm` call is unreachable without first passing
   through an explicit "this can't be undone" step, that the button is
@@ -315,7 +338,7 @@ local inventory edits" — not yet built, out of scope for Phase 1-2).
 | `/classrooms/[id]/invite` | Join link + QR + one-tap share, shown right after creation |
 | `/join/[token]` | Public, pre-auth invite landing page → sign-in → student-name join step |
 | `/classrooms/[id]/pools/new` | Organizer/co-organizer only: name a pool ("Fall Supplies") and start it in `DRAFT` |
-| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4). While the pool is `OPEN_FOR_INVENTORY`, an organizer also sees `ReconcileAction` — the one-way "work out what still needs buying" step. Once the pool has moved past that (`RECONCILING` or later), everyone sees `MyAllocationPanel` (their own household's status) and an organizer additionally sees `OrganizerAllocationPanel` (the full purchase breakdown) (Phase 6). While still `RECONCILING`, that same panel also embeds a `ProductOfferForm` per item that still needs buying, and the organizer sees `GeneratePurchasePlanAction` — the one-way "work out the cheapest way to buy what's left" step; once a plan exists (`PURCHASE_PROPOSED` or later) the organizer additionally sees `PurchasePlanPanel` (chosen retailer/pack/cost per item, running total, and an approve step) (Phase 7+8). Once a plan exists an organizer also sees `StripeOnboardingCard` (connect a bank account for this classroom); while the pool is `PURCHASE_PROPOSED` they see `GeneratePaymentsAction` — the one-way "open payment for this pool" step, gated on the plan being `APPROVED` and Stripe being `ACTIVE`; once payments exist (`PAYMENT_OPEN` or later) an organizer additionally sees `PaymentsThresholdPanel` (percent collected, the below-90% risk banner, and the finalize action) and `OrganizerPaymentsPanel` (every household's payment, with cash-fallback and refund actions), and everyone sees a link to `/pools/[id]/payment` (Phase 9). Once the pool has entered ordering (`ORDERED` or later), an organizer additionally sees `RecordOrderAction` and `GenerateDistributionAction` while still `ORDERED`, then `DistributionPanel`, `ClassReserveCard`, and `CompletePoolAction` once distribution exists (`DISTRIBUTING` or later); everyone sees a link to `/pools/[id]/distribution` once distribution exists (Phase 10) |
+| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). While still `DRAFT`, an organizer also sees `ImportRequirementsForm` — the AI-assisted "import from pasted text" path — mounted alongside (never replacing) the manual add form (Phase 11). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4). While the pool is `OPEN_FOR_INVENTORY`, an organizer also sees `ReconcileAction` — the one-way "work out what still needs buying" step. Once the pool has moved past that (`RECONCILING` or later), everyone sees `MyAllocationPanel` (their own household's status) and an organizer additionally sees `OrganizerAllocationPanel` (the full purchase breakdown) (Phase 6). While still `RECONCILING`, that same panel also embeds a `ProductOfferForm` per item that still needs buying, and the organizer sees `GeneratePurchasePlanAction` — the one-way "work out the cheapest way to buy what's left" step; once a plan exists (`PURCHASE_PROPOSED` or later) the organizer additionally sees `PurchasePlanPanel` (chosen retailer/pack/cost per item, running total, and an approve step) (Phase 7+8). Once a plan exists an organizer also sees `StripeOnboardingCard` (connect a bank account for this classroom); while the pool is `PURCHASE_PROPOSED` they see `GeneratePaymentsAction` — the one-way "open payment for this pool" step, gated on the plan being `APPROVED` and Stripe being `ACTIVE`; once payments exist (`PAYMENT_OPEN` or later) an organizer additionally sees `PaymentsThresholdPanel` (percent collected, the below-90% risk banner, and the finalize action) and `OrganizerPaymentsPanel` (every household's payment, with cash-fallback and refund actions), and everyone sees a link to `/pools/[id]/payment` (Phase 9). Once the pool has entered ordering (`ORDERED` or later), an organizer additionally sees `RecordOrderAction` and `GenerateDistributionAction` while still `ORDERED`, then `DistributionPanel`, `ClassReserveCard`, and `CompletePoolAction` once distribution exists (`DISTRIBUTING` or later); everyone sees a link to `/pools/[id]/distribution` once distribution exists (Phase 10) |
 | `/pools/[id]/inventory` | "Shop Your Home First" (PRD §4) — the caller's own household inventory checklist: one +/- stepper row per (requirement, student) they have in this classroom (Phase 4) |
 | `/pools/[id]/contribute` | "Offer surplus" (PRD §5.1) — the caller's own pledge screen: one offer card per (requirement, student) they have in this classroom, showing their own pledge status and a withdraw action while still `PLEDGED`. Linked from `/pools/[id]` once the pool is past `DRAFT`, alongside (but visually secondary to, per the "optional/low-pressure" framing) the inventory link (Phase 5). The organizer's confirmation view is not a page — it's `OrganizerContributionsPanel`, embedded directly on `/pools/[id]` next to the inventory summary, same as Phase 4 |
 | `/pools/[id]/payment` | The caller's own household payment screen (PRD §8.4) — `GET /pools/{poolId}/payments/mine`. `null` reads as "nothing to pay" (not generated yet, or no residual demand); a `PENDING` payment shows the amount, the required "you're paying the class organizer, not ClassPool" disclosure, and a single "Pay with card" action (a V1 stub — see below); any other state shows plain-language status with no pay button. Linked from `/pools/[id]` once `hasPayments(pool.state)` (Phase 9) |
@@ -464,6 +487,56 @@ folds its own "already complete" read state into the same component
 than a separate always-mounted read-only sibling, and leans into PRD's
 "savings shown" moment of warmth in its copy without fabricating an actual
 savings figure (that computation is explicitly a later phase's job).
+
+Phase 11 (AI-assisted requirement import, PRD §3.1/§3.2) adds a second,
+equally-first-class way to build a `DRAFT` pool's requirement list —
+`ImportRequirementsForm` (`POST /pools/{poolId}/requirement-sources`) is
+mounted directly below `RequirementForm` on `/pools/[id]`, never in place of
+it, per the PRD's explicit "manual entry stays available indefinitely"
+principle (the section heading literally says "Or import from pasted
+text"). The source-type picker uses the same `*_OPTIONS` array + label-helper
+pattern `STRICTNESS_OPTIONS`/`strictnessLabel` established in Phase 3
+(`REQUIREMENT_SOURCE_TYPE_OPTIONS`/`requirementSourceTypeLabel` in
+`pool-labels.ts`), covering only the three values the import endpoint
+actually accepts (`PASTED_EMAIL`/`PASTED_PORTAL`/`PASTED_MESSAGE`) — the
+wider `RequirementSource.sourceType` enum also carries `PDF`/`PHOTO`/
+`SCREENSHOT`/`WORD_DOC` (documented file-upload kinds V1 doesn't build,
+since they need object storage) and `MANUAL` (never a value this app sends),
+so the options list is deliberately narrower than the full response type.
+
+On success, the form never silently drops the extracted items into the list
+with no acknowledgment: it shows a `role="status"` summary that separately
+counts and names items that came back `EXTRACTED` ("ready to review," at/above
+the API's 0.85 confidence threshold) versus `NEEDS_REVIEW` (below it, worded
+"need a closer look before you can confirm the list") — two different
+sentences, not one blended count — before calling `onImported` with the whole
+batch. `onImported` mirrors `RequirementForm`'s existing `onSaved` callback
+shape exactly (the pool page's `updatePool` appends to `pool.requirements`
+and bumps `requirementCount`), just for an array instead of one item, so
+there's no second, parallel way of updating pool state on the page.
+
+`RequirementListItem` renders AI provenance only when
+`requirement.confidence != null` — manual entries (`confidence: null`,
+unconditionally, per PRD §3.2) show nothing new at all, so this phase adds no
+visual noise to the Phase 3 manual-entry path it sits beside. Where it does
+apply, `requirementNeedsReview`/`requirementConfidenceLabel` in
+`pool-labels.ts` turn `state === "NEEDS_REVIEW"` into a visibly and textually
+distinct badge ("Needs a closer look — N% confidence," amber, plus an amber
+row background) from `state === "EXTRACTED"` ("AI-extracted — N% confidence,"
+neutral gray) — Phase 3 defined `NEEDS_REVIEW` in the contract but never
+actually produced it (manual entries are always `EXTRACTED`), so this is the
+first UI to give it a real, distinct appearance. `sourceEvidence` — the PRD's
+explicit transparency requirement ("every extracted field retains source
+evidence") — is shown via a native `<details>/<summary>` disclosure ("Why was
+this extracted this way?") rather than always-visible text, keeping the list
+scannable while keeping the evidence one click away and present in the DOM
+either way (so it's genuinely accessible, not hidden behind JS state). This
+phase does not change `ConfirmPoolAction` — confirming still only requires at
+least one requirement, matching the contract's own `confirmPool` behavior
+(it moves every `EXTRACTED`/`NEEDS_REVIEW` requirement to `CONFIRMED`
+unconditionally) — so an organizer can still confirm a list with unreviewed
+`NEEDS_REVIEW` rows on it; the badge is a clear signal, not a hard gate, since
+the contract doesn't expose one to build against.
 
 ## Known discrepancies / assumptions against the contract
 
@@ -631,3 +704,17 @@ Flagged here rather than editing `contracts/openapi.yaml` unilaterally:
     now returns it) as part of Phase 10 integration, so `RecordOrderAction`
     sends the real row id — correct even when a requirement's plan spans more
     than one offer/line.
+16. **`confirmPool` doesn't require every requirement to be reviewed first
+    (Phase 11).** PRD §3.2's AI-import update implies `NEEDS_REVIEW` items
+    should get organizer attention "before you can confirm the list" (see
+    `ImportRequirementsForm`'s own results-summary copy), but the contract's
+    `confirmPool` operation only requires `requirementCount >= 1` and
+    unconditionally moves every `EXTRACTED`/`NEEDS_REVIEW` requirement to
+    `CONFIRMED` — there's no 409 case for "some requirements still need
+    review," and `ConfirmPoolAction` (Phase 3, unchanged here) has no way to
+    block on it without inventing a client-only check the contract doesn't
+    back. `RequirementListItem` gives `NEEDS_REVIEW` a clearly distinct,
+    attention-drawing badge, but confirming a list with unreviewed rows on it
+    is still possible today. Worth a follow-up contract conversation if
+    product wants a real gate (e.g. `confirmPool` 409-ing while any
+    requirement is `NEEDS_REVIEW`) rather than a UI-only nudge.
