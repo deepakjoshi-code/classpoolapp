@@ -124,6 +124,18 @@ public class PoolService {
         poolRepository.save(pool);
     }
 
+    /**
+     * Phase 8's {@code PurchasePlanService.generate} moves the pool {@code RECONCILING ->
+     * PURCHASE_PROPOSED} once a purchase plan has been generated — package-visible, mirroring
+     * {@link #transitionToReconciling} exactly (the Pool state machine's transitions stay owned by
+     * this class even when another service's action drives them).
+     */
+    @Transactional
+    void transitionToPurchaseProposed(Pool pool) {
+        pool.setState(PoolState.PURCHASE_PROPOSED);
+        poolRepository.save(pool);
+    }
+
     void requireOrganizer(UUID callerUserId, UUID classroomId) {
         if (!membershipRepository.hasOrganizerRole(classroomId, callerUserId)) {
             throw new ForbiddenException("Caller is not an organizer on this classroom");
