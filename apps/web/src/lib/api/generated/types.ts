@@ -294,6 +294,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pools/{poolId}/inventory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** "Shop Your Home First" (PRD §4) — the caller's own household inventory status for every requirement in this pool, one line per (requirement, student they have in this classroom). Only meaningful once the pool has left DRAFT (requirements are CONFIRMED with a known quantityPerStudent); returns an empty array for a still-DRAFT pool rather than an error. Any member may call this for their own household — there is nothing to view for anyone else's. */
+        get: operations["getMyInventory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/requirements/{requirementId}/inventory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Record how many of this requirement the caller's student already owns (PRD §4's quick +/- stepper) — upsert, one row per (requirement, student). `ownedQuantity` is clamped to `[0, quantityPerStudent]` server-side (owning more than required doesn't reduce anyone else's demand — surplus offering is a separate, later action per PRD §5, not implied by a high inventory number here). Caller must have a Membership on this pool's classroom for the given `studentId` — never lets one household record inventory for another's child. */
+        put: operations["setInventory"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/inventory/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Organizer dashboard aggregate (PRD §12.3 — "Inventory completed 19/25"): how many of the classroom's students have at least one inventory line recorded, out of the total joined, plus per-requirement totals already owned across every household. Organizer/co-organizer only. */
+        get: operations["getInventorySummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/household/dashboard": {
         parameters: {
             query?: never;
@@ -454,6 +505,30 @@ export interface components {
              * @enum {string}
              */
             strictness: "EXACT" | "EQUIVALENT_ALLOWED" | "GENERIC";
+        };
+        InventoryLine: {
+            /** Format: uuid */
+            requirementId?: string;
+            requirementName?: string;
+            quantityPerStudent?: number;
+            /** Format: uuid */
+            studentId?: string;
+            studentFirstName?: string;
+            ownedQuantity?: number;
+            /** @description max(0, quantityPerStudent - ownedQuantity) — PRD §4's 'Still needed'. */
+            stillNeeded?: number;
+        };
+        InventorySummary: {
+            studentsWithInventorySubmitted?: number;
+            totalJoinedStudents?: number;
+            perRequirement?: {
+                /** Format: uuid */
+                requirementId?: string;
+                requirementName?: string;
+                totalOwned?: number;
+                /** @description Same as Requirement.totalDemand — null if the pool isn't confirmed yet. */
+                totalRequired?: number | null;
+            }[];
         };
     };
     responses: never;
@@ -1053,6 +1128,109 @@ export interface operations {
             };
             /** @description Pool already confirmed, or has zero requirements */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getMyInventory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InventoryLine"][];
+                };
+            };
+            /** @description Caller has no Membership on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setInventory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                requirementId: components["parameters"]["RequirementId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    studentId: string;
+                    ownedQuantity: number;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InventoryLine"];
+                };
+            };
+            /** @description Caller has no Membership on this classroom for that student */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool is still DRAFT — nothing to record inventory against yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getInventorySummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InventorySummary"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

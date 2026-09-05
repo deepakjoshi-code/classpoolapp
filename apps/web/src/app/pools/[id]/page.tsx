@@ -10,6 +10,7 @@ import { poolStateLabel } from "@/lib/pool-labels";
 import { RequirementForm } from "@/components/RequirementForm";
 import { RequirementListItem } from "@/components/RequirementListItem";
 import { ConfirmPoolAction } from "@/components/ConfirmPoolAction";
+import { InventorySummaryPanel } from "@/components/InventorySummaryPanel";
 
 type LoadState =
   | { status: "loading" }
@@ -128,6 +129,27 @@ export default function PoolDetailPage() {
           This list is locked — the pool has moved past the draft stage, so
           items can no longer be changed here.
         </p>
+      )}
+
+      {pool.state !== "DRAFT" && (
+        <a
+          href={`/pools/${pool.id}/inventory`}
+          className="mt-4 block rounded-lg border-2 border-brand-200 bg-brand-50 p-4 hover:bg-brand-100"
+        >
+          <p className="text-base font-semibold text-brand-900">
+            Shop your home first →
+          </p>
+          <p className="mt-1 text-sm text-brand-800">
+            Tell us what your household already has before anyone buys
+            anything new.
+          </p>
+        </a>
+      )}
+
+      {isOrganizer && pool.state !== "DRAFT" && (
+        <div className="mt-4">
+          <InventorySummaryPanel poolId={pool.id} />
+        </div>
       )}
 
       <ul className="mt-6 space-y-3">

@@ -42,6 +42,8 @@ export type HouseholdDashboard = DeepRequired<Schemas["HouseholdDashboard"]>;
 export type Pool = DeepRequired<Schemas["Pool"]>;
 export type PoolDetail = DeepRequired<Schemas["PoolDetail"]>;
 export type Requirement = DeepRequired<Schemas["Requirement"]>;
+export type InventoryLine = DeepRequired<Schemas["InventoryLine"]>;
+export type InventorySummary = DeepRequired<Schemas["InventorySummary"]>;
 
 /**
  * Request body type — left exactly as generated. Unlike the responses above,

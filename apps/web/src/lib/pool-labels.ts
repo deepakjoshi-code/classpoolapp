@@ -49,3 +49,23 @@ export const POOL_STATE_LABELS: Record<Pool["state"], string> = {
 export function poolStateLabel(state: Pool["state"]): string {
   return POOL_STATE_LABELS[state] ?? state;
 }
+
+/**
+ * "Shop Your Home First" completion copy (PRD §4.2: "After completion show
+ * immediate value, for example: 'You already have $31 worth of your list.'").
+ * This phase's data has no item prices, so rather than fabricate a dollar
+ * figure, this adapts the same "immediate value" framing to an honest count
+ * of checklist items (requirement × student rows) already fully covered by
+ * what the household already owns — see apps/web/README.md for why item
+ * count, not a touched/untouched flag, is the completion signal used here.
+ */
+export function inventoryCoverageMessage(
+  coveredCount: number,
+  totalCount: number
+): string {
+  if (totalCount === 0) return "";
+  if (coveredCount === totalCount) {
+    return `You already have all ${totalCount} item${totalCount === 1 ? "" : "s"} covered!`;
+  }
+  return `${coveredCount} of ${totalCount} item${totalCount === 1 ? "" : "s"} already covered.`;
+}

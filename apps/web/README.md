@@ -2,9 +2,9 @@
 
 Next.js 15 (App Router) + TypeScript PWA for ClassPool's parent/organizer-facing
 frontend. Covers Phase 1 (PWA shell + auth), Phase 2 (schools/classes/
-memberships), and Phase 3 (pools + manual requirement ingestion/verification)
-of the V1 build order — see `../../ARCHITECTURE.md` §4 and `../../docs/PRD.md`
-§17.3.
+memberships), Phase 3 (pools + manual requirement ingestion/verification),
+and Phase 4 (household inventory — "Shop Your Home First") of the V1 build
+order — see `../../ARCHITECTURE.md` §4 and `../../docs/PRD.md` §17.3.
 
 ## Running it
 
@@ -62,6 +62,19 @@ Component tests live in `src/tests/` (Vitest + React Testing Library), per
   through an explicit "this can't be undone" step, that the button is
   disabled with zero requirements, and that both 409 cases (zero
   requirements, already confirmed) render distinct, specific messages.
+- `InventoryStepperRow.test.tsx` — the "Shop Your Home First" +/- stepper
+  (PRD §4.2): renders the item name/needed quantity/current count, asserts
+  the stepper buttons carry real accessible names ("Decrease/Increase owned
+  <item> for <student>", not bare icon buttons), that a click updates the
+  count optimistically before the debounced `PUT .../inventory` call lands
+  with the right `studentId`/`ownedQuantity`, that rapid clicks collapse into
+  one network call carrying the final value, that the buttons — not just the
+  displayed number — are disabled at 0 and at `quantityPerStudent` so a user
+  can't spam the count out of range even before the server's own clamp, and
+  that a failed save reverts the count and surfaces an inline error.
+- `InventorySummaryPanel.test.tsx` — the organizer aggregate view: fetches
+  `GET /pools/{id}/inventory/summary` and renders the "completed X/Y
+  students" line plus each requirement's already-owned total.
 
 ## API client — generated from the contract
 
@@ -130,7 +143,8 @@ local inventory edits" — not yet built, out of scope for Phase 1-2).
 | `/classrooms/[id]/invite` | Join link + QR + one-tap share, shown right after creation |
 | `/join/[token]` | Public, pre-auth invite landing page → sign-in → student-name join step |
 | `/classrooms/[id]/pools/new` | Organizer/co-organizer only: name a pool ("Fall Supplies") and start it in `DRAFT` |
-| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3) |
+| `/pools/[id]` | Pool detail — requirement list, add/edit/remove + confirm for an organizer while `DRAFT`, read-only otherwise (Phase 3). Once the pool is past `DRAFT`, also links to `/pools/[id]/inventory` for every member and shows the organizer inventory summary panel (Phase 4) |
+| `/pools/[id]/inventory` | "Shop Your Home First" (PRD §4) — the caller's own household inventory checklist: one +/- stepper row per (requirement, student) they have in this classroom (Phase 4) |
 
 ## Known discrepancies / assumptions against the contract
 
@@ -188,7 +202,26 @@ Flagged here rather than editing `contracts/openapi.yaml` unilaterally:
    over-build multi-pool-per-classroom UI for Phase 3. A classroom with two
    simultaneously-active pools would only show one from the dashboard (the
    other is still reachable by URL) — revisit if that becomes a real case.
-8. **No client-side role check gates viewing a pool, only managing one.**
+8. **Household inventory "completion" is defined as coverage, not as a
+   touched/untouched flag (Phase 4).** `InventoryLine` has no field telling
+   the client whether a row's `ownedQuantity` is a value the household
+   actually entered vs. a server-side default of 0 for a requirement they
+   never opened — both look identical on `GET .../inventory`. Rather than
+   fake that distinction with client-only "have I clicked this row this
+   session" state (which would forget itself on refresh and show nothing to
+   a returning household who already finished last time), `/pools/[id]/
+   inventory`'s progress message (`inventoryCoverageMessage` in
+   `pool-labels.ts`) is driven by how many rows are already fully covered
+   (`stillNeeded === 0`) out of the total — "X of Y items already covered",
+   escalating to "You already have all Y items covered!" at 100%. This is
+   honest immediate value from the moment the page loads (PRD §4.2's "show
+   immediate value... 'You already have $31 worth of your list'" — adapted
+   to an item count since this phase has no item prices to total up), and it
+   updates live as the household adjusts a stepper, but it does mean a
+   household that genuinely owns zero of everything looks identical to one
+   that hasn't started yet (both read "0 of Y covered"). Worth revisiting if
+   the API ever adds an explicit "has this row been set" flag.
+9. **No client-side role check gates viewing a pool, only managing one.**
    `GET /pools/{poolId}` requires *some* Membership on the classroom (any
    role), so any parent in the class can view a pool read-only — matching
    the contract. `/pools/[id]` and `/classrooms/[id]/pools/new` check the
