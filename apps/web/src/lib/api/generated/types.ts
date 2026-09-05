@@ -1164,6 +1164,11 @@ export interface components {
             createdAt?: string;
         };
         PurchasePlanLine: {
+            /**
+             * Format: uuid
+             * @description This line's own persisted row id — the value Phase 10's recordOrder request body references as purchasePlanLineId (a plan can have more than one line per requirement, e.g. two distinct offers used together, so requirementId alone can't address a specific line).
+             */
+            id?: string;
             /** Format: uuid */
             requirementId?: string;
             requirementName?: string;

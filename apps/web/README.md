@@ -625,20 +625,9 @@ Flagged here rather than editing `contracts/openapi.yaml` unilaterally:
     either isn't met, so the only 409 actually reachable by clicking the
     button in normal use is "payments already exist" — same generic-conflict
     message used elsewhere for an unreachable-in-practice case.
-15. **`PurchasePlanLine` has no `id` field anywhere in the contract, but
-    `recordOrder`'s request body needs a `purchasePlanLineId` per overridden
-    line (Phase 10).** `GET /pools/{poolId}/purchase-plan` returns each line
-    keyed only by `requirementId`/`productOfferId` — there's no line-level
-    primary key a client could echo back to identify "this specific plan
-    line" when submitting a substitution override. Rather than invent a
-    client-side id or edit `openapi.yaml` unilaterally, `RecordOrderAction`
-    sends that line's `requirementId` as the `purchasePlanLineId` value,
-    which is correct in the common case (one plan line per requirement) but
-    ambiguous if a single requirement's plan ever spans more than one
-    offer/line — the same rare edge case `PurchasePlanLine.wasteQuantity`'s
-    own "designated line" doc comment already calls out for waste
-    attribution. In that edge case, only the last edited line for a given
-    requirement in the UI ends up applied. Worth a follow-up contract
-    conversation if a future phase wants `PurchasePlanLine` to carry its own
-    `id` (mirroring every other line-item schema in this contract, e.g.
-    `OrderLine.id`).
+15. ~~`PurchasePlanLine` had no `id` field, so `recordOrder`'s
+    `purchasePlanLineId` had no unambiguous value to send.~~ Fixed:
+    `PurchasePlanLine.id` was added to the contract (and `PurchasePlanService`
+    now returns it) as part of Phase 10 integration, so `RecordOrderAction`
+    sends the real row id — correct even when a requirement's plan spans more
+    than one offer/line.

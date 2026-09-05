@@ -56,18 +56,10 @@ type LineOverride = { actualCost: string; actualDescription: string };
  * Action`, `GenerateDistributionAction`) — though the override path can
  * still trigger real top-up charges, so it isn't a bare button either.
  *
- * KNOWN CONTRACT GAP: `recordOrder`'s request body needs a
- * `purchasePlanLineId` per overridden line, but `PurchasePlanLine` (the
- * shape `GET .../purchase-plan` actually returns) has no `id` field of its
- * own anywhere in the contract — only `requirementId`/`productOfferId`.
- * Rather than invent a client-side id or edit the contract unilaterally,
- * this sends that line's `requirementId` as the `purchasePlanLineId` value,
- * which is correct in the common case (one plan line per requirement) but
- * ambiguous if a single requirement's plan ever spans more than one
- * offer/line (the same rare edge case `PurchasePlanLine.wasteQuantity`'s own
- * "designated line" doc comment already calls out) — only the last edited
- * line for a given requirement would end up applied in that case. Flagged in
- * README's "Known discrepancies" rather than silently working around it.
+ * `PurchasePlanLine.id` (its own persisted row id) addresses each line
+ * unambiguously even when a single requirement's plan spans more than one
+ * offer/line (e.g. 2x144-pack + 1x48-pack for the same item) — sent as
+ * `purchasePlanLineId` in each overridden line's request body.
  */
 export function RecordOrderAction({ poolId, onRecorded }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
@@ -131,7 +123,7 @@ export function RecordOrderAction({ poolId, onRecorded }: Props) {
                 ? dollarsToCents(override!.actualCost)
                 : null;
               return {
-                purchasePlanLineId: line.requirementId,
+                purchasePlanLineId: line.id,
                 actualCostCents: costCents !== null && Number.isFinite(costCents) ? costCents : null,
                 actualDescription: override!.actualDescription.trim()
                   ? override!.actualDescription.trim()

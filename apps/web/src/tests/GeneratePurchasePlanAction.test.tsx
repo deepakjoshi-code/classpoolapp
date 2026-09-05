@@ -21,6 +21,7 @@ const plan: PurchasePlan = {
   totalCostCents: 4647,
   lines: [
     {
+      id: "plan-line-1",
       requirementId: "req-1",
       requirementName: "Glue Stick",
       productOfferId: "offer-1",

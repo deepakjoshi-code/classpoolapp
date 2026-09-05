@@ -22,6 +22,7 @@ const plan: PurchasePlan = {
   totalCostCents: 9647,
   lines: [
     {
+      id: "plan-line-1",
       requirementId: "req-1",
       requirementName: "Glue Stick",
       productOfferId: "offer-1",
@@ -32,6 +33,7 @@ const plan: PurchasePlan = {
       wasteQuantity: 3,
     },
     {
+      id: "plan-line-2",
       requirementId: "req-2",
       requirementName: "Notebooks",
       productOfferId: "offer-2",
@@ -179,7 +181,7 @@ describe("RecordOrderAction", () => {
         body: {
           lines: [
             {
-              purchasePlanLineId: "req-2",
+              purchasePlanLineId: "plan-line-2",
               actualCostCents: 5800,
               actualDescription: "Different brand notebooks",
             },
