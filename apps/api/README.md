@@ -3,8 +3,9 @@
 Spring Boot 3 / Java 21 backend implementing `contracts/openapi.yaml`'s Phase 1 (PWA shell + auth),
 Phase 2 (schools/classes/memberships), Phase 3 (pools + manual requirements, no AI yet),
 Phase 4 (household inventory — "Shop Your Home First"), Phase 5 (surplus contribution pool),
-Phase 6/7 (allocation & residual-demand engine), and Phase 8 (bulk pack optimizer / purchase plan)
-surface — see `ARCHITECTURE.md` §4 and `docs/PRD.md` §17.3 for the build-order this corresponds to.
+Phase 6/7 (allocation & residual-demand engine), Phase 8 (bulk pack optimizer / purchase plan), and
+Phase 9 (Stripe Express onboarding + per-household payment collection) surface — see
+`ARCHITECTURE.md` §4 and `docs/PRD.md` §17.3 for the build-order this corresponds to.
 
 ## Running locally
 
@@ -515,6 +516,115 @@ every one of these six endpoints (unlike Phase 6/7's allocation surface, which h
 organizer-only and a member-facing "mine" view — this phase has no member-facing counterpart at
 all, per the contract).
 
+## Payment allocation (Phase 9) design notes
+
+New surface, split across two controllers that share one `PaymentService`: `StripeOnboardingController`
+(`POST/GET /classrooms/{classroomId}/stripe-onboarding*`, three routes) and `PaymentController`
+(`/pools/{poolId}/payments/*`, nine routes) — kept as one service (same "one class per phase"
+precedent as `ContributionService`/`PurchasePlanService`) but two controllers purely because the
+contract puts the two route groups under different resource prefixes; `PoolController` was already
+147 lines and this phase alone is twelve routes, so folding them in wasn't a real option. New
+entities `OrganizerStripeAccount`/`Payment` map directly onto the V1 migration's already-present
+`organizer_stripe_account`/`payment` tables — no new migration needed for this phase either.
+
+**The `StripeGateway` boundary — this phase's real architectural decision.** There is no Stripe API
+key available in this sandbox, and no guarantee of network access to stripe.com even with one, so
+all Stripe interaction goes through `service/StripeGateway.java`, an interface with exactly one
+registered implementation, `StubStripeGateway` (`@Component`, same pattern as `EmailSender`/
+`LoggingEmailSender`): `createExpressAccount` returns a fake `acct_stub_...` id and an onboarding
+URL built from it; `onboardingUrlFor` mints (deterministically, in the stub) a fresh link for an
+existing account — modeled after Stripe's own Account Links, which are genuinely short-lived and
+must be re-requested, so a real implementation calling the live API here on every read is *correct*
+production behavior, not a workaround; `checkAccountStatus` just echoes back whatever status it's
+given (the stub never contacts a real account, and per this task's spec must never quietly
+self-complete onboarding — only `PaymentService.completeStripeOnboarding` does that);
+`createDestinationCharge`/`refund` always succeed, returning fake `pi_stub_.../re_stub_...` ids.
+Every method signature is written to match what a real `stripe-java`-SDK-backed implementation
+would need (see the interface's own Javadoc for the exact `Account`/`AccountLink`/`PaymentIntent`/
+`Refund` calls each one maps to) — a later phase swaps in that real implementation with **no**
+change anywhere else in `PaymentService`, any controller, or any test that doesn't directly mock
+`StripeGateway`.
+
+**Stripe onboarding is tracked per (organizer, classroom), not per classroom alone.** The V1
+migration's `organizer_stripe_account` unique key is `(user_id, classroom_id)` — `startStripeOnboarding`/
+`completeStripeOnboarding`/`getStripeOnboardingStatus` all resolve the caller's own account for
+that classroom, and `startStripeOnboarding` is idempotent against exactly that row (a `PENDING`
+account returns as-is, no second `createExpressAccount` call; an already-`ACTIVE` one likewise just
+comes back, still 200). But `generatePayments`'s "is this classroom ready to take payments" gate,
+and the account `payMyPayment`/`refundPayment` actually charge/refund against, look for **any**
+`ACTIVE` account on the classroom (`OrganizerStripeAccountRepository
+.existsByClassroomIdAndStatus`/`.findByClassroomIdAndStatusOrderByCreatedAtAsc`) — the payout
+destination doesn't care which co-organizer completed KYC. No per-payment `stripe_account_id` is
+stored (the `payment` table has no such column); a payment action just re-resolves the classroom's
+current `ACTIVE` account at the moment it runs. Flagged here as a real V1 simplification: if a
+classroom ever had two organizers each complete onboarding, which one's account gets used isn't
+pinned down beyond "the earliest-created `ACTIVE` row" — fine for V1 (the common case is exactly
+one), a real product decision for a later phase if co-organizer Stripe accounts becomes a real
+scenario.
+
+**Flagged schema/contract gap — `Payment.method`.** The contract's `Payment.method` is `nullable:
+true` ("null until the household pays"), but the V1 migration's `payment.method` column is `not
+null` with a check constraint over exactly `PaymentMethod`'s four values — no fifth "unset"
+sentinel is available without a migration, out of this task's scope, same boundary as the
+Contribution `studentId` gap from Phase 5. `Payment`'s constructor stores `CARD` as an arbitrary
+placeholder to satisfy the `not null` constraint; `PaymentService`'s response-building code is what
+actually honors the contract, suppressing `method` back to `null` whenever `state == PENDING` (the
+only state where the stored value is a placeholder — every state from `PENDING_CASH` onward holds
+real, organizer/household-supplied information written by one of `Payment`'s `mark*` methods before
+the state changes). Flagged here rather than silently worked around.
+
+**The cost-splitting rule (PRD §8.1-8.3), and why it doesn't reconcile to the cent.**
+`PaymentService.computeHouseholdTotals` reads back two frozen snapshots — never recomputes either —
+per requirement with `residualDemand > 0` (Phase 6/7's `ResidualDemandLine`): `unitCostCents =
+round(sum(PurchasePlanLine.totalCostCents for that requirement) / residualDemand)`, dividing by
+units actually **needed**, not units purchased, so pack waste/leftover is absorbed and never billed
+to anyone (this falls out naturally from using `residualDemand` — the number of units the class
+actually needs — as the divisor regardless of how large a pack `PackOptimizer` chose to cover it;
+`PaymentServiceTest`'s cost-splitting test constructs exactly this case: 12 pencils needed, bought
+as one 24-pack for a flat 500 cents, and asserts the per-unit cost is `round(500/12) = 42`, not
+`round(500/24) = 21`). Then for each `AllocationLine` with `purchaseRequiredQuantity > 0` for that
+requirement, `lineShareCents = unitCostCents * purchaseRequiredQuantity`, summed per household via
+the line's student → `Student.householdId`. Rounding (`Math.round`, half-up) on a per-requirement
+basis means each household's total is exact for that household's own math, but the sum across all
+households will not generally equal the purchase plan's exact `totalCostCents` — a few cents of
+drift either way is an accepted V1 simplification, not a bug to chase down; `PaymentServiceTest`
+asserts the drift directly (1000 cents of plan cost splits into 1001 cents of household totals in
+its worked example) rather than asserting an exact-reconciliation invariant that isn't actually
+true.
+
+**`generatePayments` only creates a row for a household with a nonzero share.** A household whose
+own math happens to net to 0 (shouldn't occur given the residual-demand/allocation invariants, but
+nothing enforces it can't) gets no `Payment` row at all — matching the contract's own framing ("one
+Payment per household with residual purchase demand"), not a `$0` row.
+
+**`householdDisplayName` follows `ContributionResponse`'s exact identity-exposure split**, one level
+further: populated on `listPaymentsForOrganizer`, `generatePayments`'s own response (the organizer
+who just triggered generation is the same audience as the listing they'd see a moment later), and
+`getPaymentsSummary`'s `outstandingHouseholds`; always `null` on `getMyPayment` (it would just be
+the caller's own household's name).
+
+**Payment ownership resolves through `Household.primaryParentId`, matching every other place this
+codebase treats "household" as "its one parent" in V1** (see `HouseholdService`'s own Javadoc on
+`getOrCreateHousehold`). `payMyPayment` 403s unless `householdRepository.findByPrimaryParentId(callerUserId)`
+resolves to exactly the household the payment belongs to — no broader "any member of this
+classroom" check, since owning a specific payment is strictly narrower than classroom membership.
+
+**Refund gate reads `pool.state` ordinally.** `refundPayment` 409s once `pool.getState().ordinal()
+>= PoolState.ORDERED.ordinal()` — PRD §8.4's update draws the line at `ORDERED` specifically ("the
+paid-for item is redirected to Class Reserve instead, a later phase"), and using ordinal comparison
+rather than an explicit later-states list means this stays correct if a future phase inserts new
+states between `PAYMENT_OPEN` and `ORDERED` without anyone remembering to update this check.
+
+**`getPaymentsSummary`'s 0-owed edge case is treated as trivially satisfied, not divide-by-zero.**
+A pool with no `Payment` rows at all (or, in principle, every payment for $0) reports
+`percentCollected = 100.0` and `meetsThreshold = true` — nothing owed means nothing blocks
+`finalize`, which matches the plain-English reading of "90% collected" when the denominator is
+zero, rather than crashing or reporting a misleading 0%.
+
+**`finalizePayments` always recomputes the summary itself** — `acknowledgeBelowThreshold` is the
+only thing the client sends about the threshold; `meetsThreshold` is never taken from a client
+payload, so a stale or fabricated "already met" value can't bypass the gate.
+
 ## Package layout
 
 ```
@@ -522,15 +632,17 @@ app.classpool.api
 ├── domain/       JPA entities — Phase 1-2 (AppUser, Household, Student, School, SchoolYear,
 │                 Classroom, Membership, Invite), Phase 3 (Pool, Requirement), Phase 4
 │                 (ParentInventory), Phase 5 (Contribution), Phase 6/7 (AllocationLine,
-│                 ResidualDemandLine), and Phase 8 (ProductOffer, PurchasePlan, PurchasePlanLine)
-│                 tables, plus enums
+│                 ResidualDemandLine), Phase 8 (ProductOffer, PurchasePlan, PurchasePlanLine), and
+│                 Phase 9 (OrganizerStripeAccount, Payment) tables, plus enums
 ├── repository/   Spring Data JPA repositories, including the native pg_trgm dedup queries and the
 │                 shared organizer-role / confirmed-student-count / join-order queries on
 │                 MembershipRepository
 ├── service/      Business logic — auth, schools, classrooms, invites, household dashboard, pools
 │                 + requirements, household inventory, surplus contributions, the allocation &
 │                 residual-demand engine, the bulk-pack optimizer (PurchasePlanService +
-│                 PackOptimizer), the Redis-backed session/magic-link stores, email boundary
+│                 PackOptimizer), Stripe onboarding + payment collection (PaymentService), the
+│                 stubbed StripeGateway boundary, the Redis-backed session/magic-link stores, email
+│                 boundary
 ├── security/     Cookie-based session auth filter + cookie read/write helper
 ├── config/       SecurityConfig (filter chain, public-endpoint allowlist), OAuth2Config
 ├── dto/          Request/response records matching contracts/openapi.yaml's schemas exactly
