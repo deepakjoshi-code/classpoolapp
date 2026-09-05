@@ -2,11 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api/client";
-import type { AllocationSummary } from "@/lib/api/types";
+import type { AllocationSummary, Pool, ProductOffer } from "@/lib/api/types";
 import { allocationStatusLabel } from "@/lib/pool-labels";
+import { ProductOfferForm } from "@/components/ProductOfferForm";
 
 type Props = {
   poolId: string;
+  /**
+   * Passed by the pool detail page so this panel can also own the
+   * "add a price option" forms (PRD §7.3) for whichever requirements still
+   * need buying — see the `poolState === "RECONCILING"` gate below. Optional
+   * so existing callers/tests that only care about the read-only breakdown
+   * don't need to pass it; omitting it simply never shows the forms (same as
+   * any other pool state that isn't RECONCILING).
+   */
+  poolState?: Pool["state"];
 };
 
 type LoadState =
@@ -14,6 +24,12 @@ type LoadState =
   | { status: "error" }
   | { status: "not-reconciled" }
   | { status: "ready"; summary: AllocationSummary };
+
+type OffersState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "ready"; offers: ProductOffer[] };
 
 /**
  * Organizer view of the allocation & residual-demand engine's output (PRD
@@ -28,8 +44,10 @@ type LoadState =
  * page's own state gate should make it unreachable in normal use — a second
  * organizer tab, or a stale page state, could still hit it.
  */
-export function OrganizerAllocationPanel({ poolId }: Props) {
+export function OrganizerAllocationPanel({ poolId, poolState }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [offersState, setOffersState] = useState<OffersState>({ status: "idle" });
+  const showOfferForms = poolState === "RECONCILING";
 
   useEffect(() => {
     let cancelled = false;
@@ -51,6 +69,51 @@ export function OrganizerAllocationPanel({ poolId }: Props) {
       cancelled = true;
     };
   }, [poolId]);
+
+  // Price options are only actionable while the pool is RECONCILING (the
+  // contract's own gate on add/remove) — fetched once here rather than by a
+  // separate component, since this panel already has the residual-demand
+  // list they're grouped under.
+  useEffect(() => {
+    if (!showOfferForms) {
+      setOffersState({ status: "idle" });
+      return;
+    }
+
+    let cancelled = false;
+    setOffersState({ status: "loading" });
+
+    api.GET("/pools/{poolId}/product-offers", { params: { path: { poolId } } }).then(
+      ({ data, error }) => {
+        if (cancelled) return;
+        if (error || !data) {
+          setOffersState({ status: "error" });
+          return;
+        }
+        setOffersState({ status: "ready", offers: data as ProductOffer[] });
+      }
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [poolId, showOfferForms]);
+
+  function handleOfferAdded(offer: ProductOffer) {
+    setOffersState((prev) =>
+      prev.status === "ready"
+        ? { status: "ready", offers: [...prev.offers, offer] }
+        : { status: "ready", offers: [offer] }
+    );
+  }
+
+  function handleOfferRemoved(offerId: string) {
+    setOffersState((prev) =>
+      prev.status === "ready"
+        ? { status: "ready", offers: prev.offers.filter((o) => o.id !== offerId) }
+        : prev
+    );
+  }
 
   if (state.status === "loading") {
     return (
@@ -135,6 +198,39 @@ export function OrganizerAllocationPanel({ poolId }: Props) {
                       </li>
                     ))}
                   </ul>
+                )}
+
+                {showOfferForms && !fullyCovered && (
+                  <>
+                    {offersState.status === "loading" && (
+                      <p className="mt-3 border-t border-slate-100 pt-3 text-sm text-slate-500">
+                        Loading price options…
+                      </p>
+                    )}
+                    {offersState.status === "error" && (
+                      <p className="mt-3 border-t border-slate-100 pt-3 text-sm text-slate-500">
+                        Couldn't load existing price options, but you can
+                        still add one below.
+                      </p>
+                    )}
+                    {(offersState.status === "ready" ||
+                      offersState.status === "error") && (
+                      <ProductOfferForm
+                        poolId={poolId}
+                        requirementId={line.requirementId}
+                        requirementName={line.requirementName}
+                        offers={
+                          offersState.status === "ready"
+                            ? offersState.offers.filter(
+                                (o) => o.requirementId === line.requirementId
+                              )
+                            : []
+                        }
+                        onAdded={handleOfferAdded}
+                        onRemoved={handleOfferRemoved}
+                      />
+                    )}
+                  </>
                 )}
               </li>
             );
