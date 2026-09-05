@@ -430,6 +430,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pools/{poolId}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer runs the allocation & residual-demand engine (PRD §6 — "Deterministic business logic, not LLM reasoning"): freezes a snapshot of, for every (requirement, student) pair, how much is self-fulfilled from the household's own recorded inventory (Phase 4), how much is covered by the pool's RECEIVED surplus contributions (Phase 5, allocated in classroom-join order — first-joined-first-served, a deterministic tie-break, not a fairness ranking), and how much still needs to be purchased. Aggregated per requirement, the "still needs to be purchased" column is the pool's ResidualDemand (§6's formula — with ClassReserveAvailable fixed at 0, since Class Reserve isn't introduced until Phase 10). Moves the pool OPEN_FOR_INVENTORY → RECONCILING. Re-running is not supported in V1 — 409 if the pool has already left OPEN_FOR_INVENTORY. */
+        post: operations["reconcilePool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/allocation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The frozen allocation snapshot from reconcile — every (requirement, student) line plus the per-requirement residual demand aggregate. Organizer/co-organizer only; 409 if reconcile hasn't run yet. */
+        get: operations["getAllocationForOrganizer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/allocation/mine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's own students' allocation lines only — self/pool/ purchase-required status per requirement. No residual-demand aggregate (that's an organizer/class-level figure, not a household one) and no other household's data. Empty array if reconcile hasn't run yet, same "nothing to show, not an error" pattern as Phase 4's getMyInventory on a still-DRAFT pool. */
+        get: operations["getMyAllocation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/household/dashboard": {
         parameters: {
             query?: never;
@@ -637,6 +688,40 @@ export interface components {
             state?: "PLEDGED" | "RECEIVED";
             /** Format: date-time */
             createdAt?: string;
+        };
+        /**
+         * @description Per (requirement, student) outcome of the allocation engine (PRD §6). SELF_FULFILLED: the household's own recorded inventory covers it. POOL_FULFILLED: fully covered once RECEIVED contributions are counted (purchaseRequiredQuantity = 0, but some of the need came from the pool, not just the household). PURCHASE_REQUIRED: still short after both — this is what feeds the class's ResidualDemand and, later, the bulk optimizer (§7).
+         * @enum {string}
+         */
+        AllocationStatus: "SELF_FULFILLED" | "POOL_FULFILLED" | "PURCHASE_REQUIRED";
+        AllocationLine: {
+            /** Format: uuid */
+            requirementId?: string;
+            requirementName?: string;
+            /** Format: uuid */
+            studentId?: string;
+            studentFirstName?: string | null;
+            /** @description Same as Requirement.quantityPerStudent. */
+            quantityNeeded?: number;
+            ownedQuantity?: number;
+            poolFulfilledQuantity?: number;
+            purchaseRequiredQuantity?: number;
+            status?: components["schemas"]["AllocationStatus"];
+        };
+        ResidualDemandLine: {
+            /** Format: uuid */
+            requirementId?: string;
+            requirementName?: string;
+            /** @description Same as Requirement.totalDemand. */
+            totalRequired?: number;
+            totalOwned?: number;
+            totalPoolFulfilled?: number;
+            /** @description totalRequired - totalOwned - totalPoolFulfilled (ClassReserveAvailable is fixed at 0 until Phase 10) — PRD §6's formula, clamped at >= 0. This is what Phase 8's bulk optimizer sizes purchases against. */
+            residualDemand?: number;
+        };
+        AllocationSummary: {
+            allocations?: components["schemas"]["AllocationLine"][];
+            residualDemand?: components["schemas"]["ResidualDemandLine"][];
         };
     };
     responses: never;
@@ -1520,6 +1605,107 @@ export interface operations {
             };
             /** @description Contribution is already RECEIVED */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reconcilePool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationSummary"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool is not OPEN_FOR_INVENTORY (already reconciled, or still DRAFT) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getAllocationForOrganizer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationSummary"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool hasn't been reconciled yet — call POST /reconcile first */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getMyAllocation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationLine"][];
+                };
+            };
+            /** @description Caller has no Membership on this pool's classroom */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -568,6 +568,76 @@ paths:
         "403": { description: Caller is not an organizer on this pool's classroom }
         "409": { description: Contribution is already RECEIVED }
 
+  /pools/{poolId}/reconcile:
+    post:
+      operationId: reconcilePool
+      summary: >
+        Organizer runs the allocation & residual-demand engine (PRD §6 —
+        "Deterministic business logic, not LLM reasoning"): freezes a
+        snapshot of, for every (requirement, student) pair, how much is
+        self-fulfilled from the household's own recorded inventory
+        (Phase 4), how much is covered by the pool's RECEIVED surplus
+        contributions (Phase 5, allocated in classroom-join order —
+        first-joined-first-served, a deterministic tie-break, not a
+        fairness ranking), and how much still needs to be purchased.
+        Aggregated per requirement, the "still needs to be purchased"
+        column is the pool's ResidualDemand (§6's formula — with
+        ClassReserveAvailable fixed at 0, since Class Reserve isn't
+        introduced until Phase 10). Moves the pool
+        OPEN_FOR_INVENTORY → RECONCILING. Re-running is not supported in
+        V1 — 409 if the pool has already left OPEN_FOR_INVENTORY.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllocationSummary" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "Pool is not OPEN_FOR_INVENTORY (already reconciled, or still DRAFT)" }
+
+  /pools/{poolId}/allocation:
+    get:
+      operationId: getAllocationForOrganizer
+      summary: >
+        The frozen allocation snapshot from reconcile — every
+        (requirement, student) line plus the per-requirement residual
+        demand aggregate. Organizer/co-organizer only; 409 if reconcile
+        hasn't run yet.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllocationSummary" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "Pool hasn't been reconciled yet — call POST /reconcile first" }
+
+  /pools/{poolId}/allocation/mine:
+    get:
+      operationId: getMyAllocation
+      summary: >
+        The caller's own students' allocation lines only — self/pool/
+        purchase-required status per requirement. No residual-demand
+        aggregate (that's an organizer/class-level figure, not a
+        household one) and no other household's data. Empty array if
+        reconcile hasn't run yet, same "nothing to show, not an error"
+        pattern as Phase 4's getMyInventory on a still-DRAFT pool.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AllocationLine" }
+        "403": { description: Caller has no Membership on this pool's classroom }
+
   /household/dashboard:
     get:
       operationId: getHouseholdDashboard
@@ -814,3 +884,54 @@ components:
         mode: { type: string, enum: [DONATE] }
         state: { type: string, enum: [PLEDGED, RECEIVED] }
         createdAt: { type: string, format: date-time }
+
+    AllocationStatus:
+      type: string
+      enum: [SELF_FULFILLED, POOL_FULFILLED, PURCHASE_REQUIRED]
+      description: >
+        Per (requirement, student) outcome of the allocation engine (PRD
+        §6). SELF_FULFILLED: the household's own recorded inventory
+        covers it. POOL_FULFILLED: fully covered once RECEIVED
+        contributions are counted (purchaseRequiredQuantity = 0, but some
+        of the need came from the pool, not just the household).
+        PURCHASE_REQUIRED: still short after both — this is what feeds
+        the class's ResidualDemand and, later, the bulk optimizer (§7).
+
+    AllocationLine:
+      type: object
+      properties:
+        requirementId: { type: string, format: uuid }
+        requirementName: { type: string }
+        studentId: { type: string, format: uuid }
+        studentFirstName: { type: string, nullable: true }
+        quantityNeeded: { type: integer, description: Same as Requirement.quantityPerStudent. }
+        ownedQuantity: { type: integer }
+        poolFulfilledQuantity: { type: integer }
+        purchaseRequiredQuantity: { type: integer }
+        status: { $ref: "#/components/schemas/AllocationStatus" }
+
+    ResidualDemandLine:
+      type: object
+      properties:
+        requirementId: { type: string, format: uuid }
+        requirementName: { type: string }
+        totalRequired: { type: integer, description: Same as Requirement.totalDemand. }
+        totalOwned: { type: integer }
+        totalPoolFulfilled: { type: integer }
+        residualDemand:
+          type: integer
+          description: >
+            totalRequired - totalOwned - totalPoolFulfilled
+            (ClassReserveAvailable is fixed at 0 until Phase 10) — PRD
+            §6's formula, clamped at >= 0. This is what Phase 8's bulk
+            optimizer sizes purchases against.
+
+    AllocationSummary:
+      type: object
+      properties:
+        allocations:
+          type: array
+          items: { $ref: "#/components/schemas/AllocationLine" }
+        residualDemand:
+          type: array
+          items: { $ref: "#/components/schemas/ResidualDemandLine" }
