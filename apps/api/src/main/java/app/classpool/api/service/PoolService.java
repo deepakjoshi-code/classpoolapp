@@ -136,6 +136,36 @@ public class PoolService {
         poolRepository.save(pool);
     }
 
+    /**
+     * Phase 9's {@code PaymentService.generatePayments} moves the pool {@code PURCHASE_PROPOSED ->
+     * PAYMENT_OPEN} once payments have been generated — package-visible, mirroring {@link
+     * #transitionToPurchaseProposed} exactly.
+     */
+    @Transactional
+    void transitionToPaymentOpen(Pool pool) {
+        pool.setState(PoolState.PAYMENT_OPEN);
+        poolRepository.save(pool);
+    }
+
+    /**
+     * Phase 9's {@code PaymentService.finalizePayments} moves the pool {@code PAYMENT_OPEN ->
+     * ORDERED} once the payment-threshold gate is satisfied (or explicitly overridden) — the
+     * hand-off point into Phase 10's ordering/distribution work. Package-visible, mirroring
+     * {@link #transitionToPurchaseProposed} exactly.
+     */
+    @Transactional
+    void transitionToOrdered(Pool pool) {
+        pool.setState(PoolState.ORDERED);
+        poolRepository.save(pool);
+    }
+
+    /** Package-visible so {@code PaymentService.finalizePayments} can build the {@code
+     *  PoolDetail} response right after transitioning the pool, without a second membership
+     *  check/query round trip — reuses the same assembly {@link #confirm} uses internally. */
+    PoolDetailResponse toDetailResponse(Pool pool) {
+        return toDetail(pool);
+    }
+
     void requireOrganizer(UUID callerUserId, UUID classroomId) {
         if (!membershipRepository.hasOrganizerRole(classroomId, callerUserId)) {
             throw new ForbiddenException("Caller is not an organizer on this classroom");
