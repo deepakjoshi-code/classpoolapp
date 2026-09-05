@@ -5,9 +5,9 @@ Phase 2 (schools/classes/memberships), Phase 3 (pools + manual requirements, no 
 Phase 4 (household inventory — "Shop Your Home First"), Phase 5 (surplus contribution pool),
 Phase 6/7 (allocation & residual-demand engine), Phase 8 (bulk pack optimizer / purchase plan),
 Phase 9 (Stripe Express onboarding + per-household payment collection), Phase 10 (ordering,
-physical distribution, and Class Reserve), and Phase 11 (AI-assisted requirement import from
-pasted text) surface — see `ARCHITECTURE.md` §4 and `docs/PRD.md` §17.3 for the build-order this
-corresponds to.
+physical distribution, and Class Reserve), Phase 11 (AI-assisted requirement import from pasted
+text), and Phase 12 (in-app notifications + the shareable savings summary) surface — see
+`ARCHITECTURE.md` §4 and `docs/PRD.md` §17.3 for the build-order this corresponds to.
 
 ## Running locally
 
@@ -858,6 +858,96 @@ checked first, per this task's own instruction, and retrofitting it to also crea
 contract-required benefit (nothing reads a `MANUAL` source row anywhere in the contract). Flagged
 here rather than silently done or silently skipped.
 
+## Notifications and savings summary (Phase 12) design notes
+
+New surface, small and additive: a `Notification` entity/repository/service behind a new
+`NotificationController` (`GET /notifications/mine`, `POST /notifications/{id}/read` — nothing
+else lived under `/notifications`, so a dedicated controller was the obvious call), plus one new
+method (`AllocationService.getSavingsSummary`) exposed as a thirteenth route on the already-large
+`PoolController`. Three existing services each gained exactly one call at the end of their
+existing logic, right before their `return`, with no other change to their behavior, return
+values, or transactions: `PaymentService.generatePayments` (`PAYMENT_DUE`),
+`DistributionService.generateDistribution` (`BUNDLE_READY`), and `PoolService.complete`
+(`POOL_COMPLETED`). `Notification` maps directly onto the V1 migration's already-present
+`notification` table — no new migration, per this task's own constraint.
+
+**The full-enum, partial-emission pattern, once more.** `NotificationType` lays down the
+contract's complete 10-value list (`CLASS_INVITE`, `NEW_POOL`, `INVENTORY_COMPLETE`,
+`CONTRIBUTION_ALLOCATED`, `REUSE_PERIOD_ENDING`, `PAYMENT_DUE`, `PURCHASE_COMPLETED`,
+`BUNDLE_READY`, `POOL_COMPLETED`, `LEND_ITEM_DUE_BACK`) even though this phase's code only ever
+constructs three of them — the exact same "the contract's enum lists every value a later phase
+will eventually emit/transition into, this phase's code only reaches a few of them" shape as
+`PoolState`/`RequirementState` (see their own Javadoc, and the Phase 3/6-7 notes above). The
+`notification.type` column itself is free text with no check constraint in the V1 migration
+(unlike `channel`, which does have one), so `NotificationType` isn't enforcing anything at the
+database level — it exists purely so Java call sites can't typo a type name.
+
+**`poolId`/`message` live inside the `payload` jsonb column, not as their own columns.** The V1
+migration's `notification` table has exactly `user_id`/`type`/`channel`/`payload`/`sent_at`/
+`read_at` — no dedicated `pool_id` or `message` column, so both are written into `payload` at
+construction (`{"poolId": "...", "message": "..."}`) and read back out by `Notification
+.getPoolId()`/`getMessage()`. This is the same "the contract needs a field the table has no column
+for" shape as Phase 9's `Payment.method`/Phase 10's `OrderLine.substitutionDeltaCents` gaps, just
+resolved differently: those compute a value live from other frozen columns on every read, this one
+persists into the one flexible column the table actually offers rather than adding a migration.
+The mapping itself is Hibernate 6's native `@JdbcTypeCode(SqlTypes.JSON)` against a
+`Map<String, Object>` field (Jackson-backed, auto-detected off the classpath `spring-boot-starter-
+web` already provides — no new dependency), the same "lean on Hibernate's own type-mapping
+annotations for a Postgres-specific column rather than pull in a library" instinct as `School
+.approvedEmailDomains`'s `@JdbcTypeCode(SqlTypes.ARRAY)`.
+
+**Every notification this phase creates is `channel = PUSH`, `sentAt = now()` at construction.**
+`PUSH` here means "in-app" conceptually — there is no real Web Push infrastructure in this
+environment: no VAPID key pair, and no subscription-registration endpoint for a browser's Push API
+to hand a `PushSubscription` to. `sentAt` is set immediately rather than by a real delivery worker
+because there is no queue standing between "the row exists" and "the user can see it" for an
+in-app list — the read model *is* the delivery mechanism (`GET /notifications/mine` reading rows
+back is indistinguishable from "receiving" them). `EMAIL`/`SMS` are laid down in
+`NotificationChannel` because the check constraint allows them, unused in V1 for the identical
+reason: no real transport wired up. The natural next increment for `EMAIL`, cheap given what
+Phase 1 already built, is documented rather than built: `LoggingEmailSender` (`service/email/
+LoggingEmailSender.java`) already logs the magic-link email instead of sending it, in the total
+absence of live AWS SES access — a later phase's `NotificationService.notify` could, alongside
+writing the row, also call the same `EmailSender` interface to *log* an "email" for the
+`PAYMENT_DUE`/`BUNDLE_READY`/`POOL_COMPLETED` cases (matching `channel = EMAIL` for that call), the
+same pattern this codebase already trusts for magic-link delivery — genuinely close to trivial
+given the interface already exists, but it's a second notification per event with its own template
+text and its own decision about which events warrant an email vs. staying in-app-only, so it's
+flagged as the obvious next step rather than built speculatively here.
+
+**`markNotificationRead` is idempotent by construction, not by a special-cased check.**
+`Notification.markRead()` only sets `readAt` `if (readAt == null)` — calling it a second time is a
+no-op, so `NotificationService.markRead` doesn't need an `if already read, just return` branch of
+its own; the entity method's own idempotence is the whole story, the same "push the invariant into
+the entity" instinct as `Payment`'s `mark*` methods.
+
+**Resolving "every parent in a household," scoped to one classroom.** A household can have more
+than one parent/co-parent, and PRD §11.3's fan-out needs all of them — not just `Household
+.primaryParentId`, the "household has one parent" simplification every *payment*-ownership check
+in this codebase otherwise relies on (see the Phase 9 notes above). The new
+`MembershipRepository.findByClassroom_IdAndStudent_HouseholdId(classroomId, householdId)` resolves
+this directly: every `Membership` on the given classroom whose `student.household_id` matches,
+mapped to `parentUserId` and de-duplicated. `PaymentService.generatePayments` and
+`DistributionService.generateDistribution` both call it once per affected household;
+`PoolService.complete` instead reuses `MembershipRepository
+.findByClassroom_IdAndStudentIsNotNullOrderByCreatedAtAsc` verbatim (the exact query
+`AllocationService.reconcile` already established for "every participating student's parent on
+this classroom") since it needs *every* household in the class, not specific ones.
+
+**The savings summary's per-unit price is a real approximation, stated plainly.**
+`AllocationService.getSavingsSummary`'s `estimatedSavingsCents` prices every reused item (owned-at-
+home or pool-donated) at this same pool's own `avgUnitCostCents` — what the class actually paid
+per unit for the items it *did* buy, `round(sum(PurchasePlanLine.totalCostCents) /
+sum(ProductOffer.packQuantity * PurchasePlanLine.packCount))`, deliberately divided by units
+*purchased* rather than `itemsPurchased` (units *needed*) since a pack buy routinely covers more
+than the exact residual demand — see the Phase 9 cost-splitting notes above for the same
+purchased-vs-needed distinction in a different computation. This is a reasonable V1 stand-in — it's
+real money this specific class actually spent, not a guess — but it is not a market price: a
+reused item might have cost more or less at retail than what this pool's bulk purchase happened to
+pay for a *different* item in the same pool, and a pool that never buys anything (`itemsPurchased
+== 0`, no `PurchasePlan`) has no price signal at all, so `estimatedSavingsCents` is `0` rather than
+inventing one. Flagged here as an honest approximation rather than presented as authoritative.
+
 ## Package layout
 
 ```
@@ -867,17 +957,18 @@ app.classpool.api
 │                 (ParentInventory), Phase 5 (Contribution), Phase 6/7 (AllocationLine,
 │                 ResidualDemandLine), Phase 8 (ProductOffer, PurchasePlan, PurchasePlanLine),
 │                 Phase 9 (OrganizerStripeAccount, Payment), Phase 10 (Order, OrderLine,
-│                 DistributionBatch, DistributionItem, ClassReserveEntry), and Phase 11
-│                 (RequirementSource) tables, plus enums
+│                 DistributionBatch, DistributionItem, ClassReserveEntry), Phase 11
+│                 (RequirementSource), and Phase 12 (Notification) tables, plus enums
 ├── repository/   Spring Data JPA repositories, including the native pg_trgm dedup queries and the
-│                 shared organizer-role / confirmed-student-count / join-order queries on
-│                 MembershipRepository
+│                 shared organizer-role / confirmed-student-count / join-order / household-scoped-
+│                 to-classroom queries on MembershipRepository
 ├── service/      Business logic — auth, schools, classrooms, invites, household dashboard, pools
 │                 + requirements, household inventory, surplus contributions, the allocation &
-│                 residual-demand engine, the bulk-pack optimizer (PurchasePlanService +
-│                 PackOptimizer), Stripe onboarding + payment collection (PaymentService), ordering
-│                 + physical distribution (OrderService, DistributionService), AI-assisted
-│                 requirement import (RequirementImportService), the stubbed StripeGateway/
+│                 residual-demand engine plus the savings summary (AllocationService), the bulk-pack
+│                 optimizer (PurchasePlanService + PackOptimizer), Stripe onboarding + payment
+│                 collection (PaymentService), ordering + physical distribution (OrderService,
+│                 DistributionService), AI-assisted requirement import (RequirementImportService),
+│                 in-app notifications (NotificationService), the stubbed StripeGateway/
 │                 AiExtractionGateway boundaries, the Redis-backed session/magic-link stores, email
 │                 boundary
 ├── security/     Cookie-based session auth filter + cookie read/write helper
