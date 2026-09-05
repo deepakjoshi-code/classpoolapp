@@ -2,8 +2,9 @@
 
 Spring Boot 3 / Java 21 backend implementing `contracts/openapi.yaml`'s Phase 1 (PWA shell + auth),
 Phase 2 (schools/classes/memberships), Phase 3 (pools + manual requirements, no AI yet),
-Phase 4 (household inventory — "Shop Your Home First"), and Phase 5 (surplus contribution pool)
-surface — see `ARCHITECTURE.md` §4 and `docs/PRD.md` §17.3 for the build-order this corresponds to.
+Phase 4 (household inventory — "Shop Your Home First"), Phase 5 (surplus contribution pool), and
+Phase 6/7 (allocation & residual-demand engine) surface — see `ARCHITECTURE.md` §4 and
+`docs/PRD.md` §17.3 for the build-order this corresponds to.
 
 ## Running locally
 
@@ -326,18 +327,112 @@ rather than resolved by unilaterally adding a `student_id` column to the migrati
 contract's nullability — either fix is a schema/contract decision for separate review, not an
 implementation-layer one.
 
+## Allocation & residual-demand engine (Phase 6+7) design notes
+
+New surface, all on the existing `PoolController` (same "pool-scoped, same as
+`/pools/{poolId}/confirm`" instinct Phase 4/5 already followed — the file is still under 150 lines
+after adding these three routes, so a separate `AllocationController` wasn't warranted yet): `POST
+/pools/{poolId}/reconcile`, `GET /pools/{poolId}/allocation` (organizer), `GET
+/pools/{poolId}/allocation/mine` (any member) — delegating to a new
+`AllocationService`/`AllocationLine`+`ResidualDemandLine` entities over two new tables
+(`infra/db/migrations/V3__allocation_and_residual_demand.sql`).
+
+**Design decision — no `OPEN_FOR_CONTRIBUTIONS` hop.** Nothing in this codebase transitions a Pool
+from `OPEN_FOR_INVENTORY` to `OPEN_FOR_CONTRIBUTIONS` — Phase 4 (inventory) and Phase 5
+(contributions) both already operate freely while a pool is `OPEN_FOR_INVENTORY` (the frontend only
+ever gates on `pool.state !== "DRAFT"`), so `OPEN_FOR_CONTRIBUTIONS` has been a dead enum value
+since Phase 3 laid down the full state machine. Rather than retrofit an intermediate transition
+into already-shipped, already-tested Phase 4/5 gating (a real state-machine change, out of scope
+for this task), `AllocationService.reconcile` moves the pool directly `OPEN_FOR_INVENTORY ->
+RECONCILING`. `PoolService.transitionToReconciling` is the one place that mutation happens —
+package-visible, mirroring how `requireOrganizer`/`requireMembership` already let other services
+reach into `PoolService` for the one thing they need without duplicating pool-state logic. This is
+flagged explicitly here, the same way the Contribution `studentId` gap is flagged below, rather
+than silently worked around.
+
+**Not reusing the V1 migration's `allocation` table.** V1 speculatively laid down an `allocation`
+table ("Phases 3-11 tables ... no API endpoints in this pass") shaped as one `fulfillment_type` +
+`quantity` pair per row. That can't back the contract's `AllocationLine` schema, which needs the
+owned/pool/purchase breakdown as three separate integer columns on the same line (so a caller can
+see, e.g., that a line is `PURCHASE_REQUIRED` *and* exactly how much of the shortfall the pool
+already covered). Widening or renaming that table is a schema decision for separate review, same
+boundary as the Contribution `studentId` gap — V3 instead adds `allocation_line` and
+`residual_demand_line` as new tables and leaves the V1 `allocation` table untouched and unused.
+
+**The algorithm, run once, frozen forever (V1 has no re-reconcile).** `AllocationService.reconcile`
+is one `@Transactional` method implementing PRD §6's waterfall per `(requirement, student)` pair,
+in the exact order the contract's `AllocationStatus` doc describes: household-owned inventory first
+(Phase 4's `ParentInventory.ownedQuantity`), then the pool's `RECEIVED` surplus contributions
+(Phase 5's `Contribution` — `PLEDGED` rows are explicitly excluded from `poolAvailable`, per PRD
+§5.4/§6.1: a promise isn't physical supply yet), then whatever's left is `purchaseRequiredQuantity`.
+Requires the pool to currently be `OPEN_FOR_INVENTORY` — 409 otherwise (`DRAFT`, or already past
+`OPEN_FOR_INVENTORY`) — and there is no path back to `OPEN_FOR_INVENTORY`, so once reconciled a pool
+can never be reconciled again in V1; this matches `PoolService.confirm`'s identical
+one-time-transition precedent (see the Phase 3 notes above), and the frozen `AllocationLine`/
+`ResidualDemandLine` rows are read back verbatim by both GET endpoints afterward, never
+recomputed.
+
+**Scarce pool supply is allocated first-joined-first-served — a tie-break, not a fairness
+ranking.** Per the contract's own wording, students are processed in `Membership.createdAt`
+ascending order on the classroom, and `poolAvailable` is a single running total per requirement
+that only decreases as earlier-joined students draw from it — so if the pool can't cover everyone,
+whoever joined earliest gets served first and later joiners are more likely to land in
+`PURCHASE_REQUIRED`. `AllocationServiceTest.reconcile_allocatesScarcePoolSupplyInJoinOrder_...`
+exercises this directly with two students and pool supply sized for exactly one of them.
+
+**Membership dedup by student, not by row.** A student could in principle have two Membership rows
+on the same classroom (e.g. two co-parents who each independently joined with the same child) —
+the `allocation_line` table's unique constraint is `(requirement_id, student_id)`, so exactly one
+line per student is required regardless of how many Membership rows reference them.
+`AllocationService` dedupes the join-ordered Membership list by student id, keeping the
+earliest-`createdAt` row per student — the same "distinct student" instinct
+`MembershipRepository.countDistinctStudentsByClassroom_Id` already uses, which is what
+`Pool.confirmedStudentCount` itself is built on.
+
+**`totalRequired` is derived from students actually processed at reconcile time, not the frozen
+`confirmedStudentCount`.** Unlike `Requirement.totalDemand` (frozen once, at confirm), nothing
+stops a family from joining the classroom during `OPEN_FOR_INVENTORY` (see the dead
+`OPEN_FOR_CONTRIBUTIONS` note above — Phase 4/5 already allow this), so a late joiner can appear
+between confirm and reconcile. `AllocationService.reconcile` re-reads classroom Membership live and
+gives that late joiner their own `AllocationLine` rows too — the contract's algorithm description
+says "every Membership ... with a non-null student_id" at reconcile time, not "every Membership as
+of confirm". Each requirement's `ResidualDemandLine.totalRequired` is therefore computed as
+`quantityPerStudent × (number of students actually processed for that requirement)` rather than
+`Pool.confirmedStudentCount` — this keeps the `totalRequired = totalOwned + totalPoolFulfilled +
+residualDemand` accounting identity exactly true by construction. In the common case (no late joins
+between confirm and reconcile) this is numerically identical to `Requirement.totalDemand`, matching
+the contract's own description of the field ("Same as Requirement.totalDemand"); flagged here as
+the one edge case where the two numbers could in principle diverge.
+
+**Response assembly reuses in-memory data from the reconcile pass itself where possible.**
+`reconcile`'s own response is built straight from the `Requirement`/`Membership` objects already
+loaded during the algorithm (no extra queries); the two GET endpoints, reading the persisted
+snapshot back on a later request, batch-fetch requirement names and student first names via
+`RequirementRepository`/`StudentRepository.findAllById` — the same batch-not-N+1 instinct as
+`ContributionService.listForOrganizer`'s `AppUserRepository.findAllById` call.
+
+**Authorization mirrors the existing organizer/member split exactly.** `reconcile` and
+`getAllocationForOrganizer` both use `PoolService.requireOrganizer`; `getMyAllocation` uses
+`PoolService.requireMembership` and then derives "own students" from the caller's own Membership
+rows, the same pattern `InventoryService.getMyInventory` already established. `getMyAllocation`
+returns an empty list (200, not an error) if reconcile hasn't run yet — the same "nothing to show
+yet" precedent `InventoryService.getMyInventory` sets for a still-`DRAFT` pool — while
+`getAllocationForOrganizer` 409s in that case instead, per the contract.
+
 ## Package layout
 
 ```
 app.classpool.api
 ├── domain/       JPA entities — Phase 1-2 (AppUser, Household, Student, School, SchoolYear,
 │                 Classroom, Membership, Invite), Phase 3 (Pool, Requirement), Phase 4
-│                 (ParentInventory), and Phase 5 (Contribution) tables, plus enums
+│                 (ParentInventory), Phase 5 (Contribution), and Phase 6/7 (AllocationLine,
+│                 ResidualDemandLine) tables, plus enums
 ├── repository/   Spring Data JPA repositories, including the native pg_trgm dedup queries and the
-│                 shared organizer-role / confirmed-student-count queries on MembershipRepository
+│                 shared organizer-role / confirmed-student-count / join-order queries on
+│                 MembershipRepository
 ├── service/      Business logic — auth, schools, classrooms, invites, household dashboard, pools
-│                 + requirements, household inventory, surplus contributions, the Redis-backed
-│                 session/magic-link stores, email boundary
+│                 + requirements, household inventory, surplus contributions, the allocation &
+│                 residual-demand engine, the Redis-backed session/magic-link stores, email boundary
 ├── security/     Cookie-based session auth filter + cookie read/write helper
 ├── config/       SecurityConfig (filter chain, public-endpoint allowlist), OAuth2Config
 ├── dto/          Request/response records matching contracts/openapi.yaml's schemas exactly
