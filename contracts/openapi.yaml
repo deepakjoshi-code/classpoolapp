@@ -1237,6 +1237,60 @@ paths:
         "403": { description: Caller is not an organizer on this pool's classroom }
         "409": { description: Pool is not DISTRIBUTING }
 
+  /pools/{poolId}/requirement-sources:
+    post:
+      operationId: importRequirementsFromText
+      summary: >
+        Organizer pastes a supply list (a forwarded email, school portal
+        text, or message) and AI extracts candidate requirements from it
+        (PRD §3.1/§3.2). Every extracted field keeps its source evidence
+        and confidence score. An item at or above the confidence
+        threshold (0.85) is created as `CONFIRMED`-eligible `EXTRACTED`
+        (still requires organizer confirmation like every requirement,
+        per §3.3 — "nothing is financially actionable until a human
+        organizer verifies"); below it, `NEEDS_REVIEW` (the organizer
+        must Correct/Edit before confirming — never a silent guess, per
+        §3.2's PM update). Manual entry (`POST .../requirements`) remains
+        available indefinitely alongside this, never replaced by it.
+        Only while the pool is `DRAFT` — matches every other
+        requirement-creating action. V1 only accepts pasted text — file
+        upload (PDF/photo/screenshot/Word doc, needing object storage) is
+        a documented gap, not built in this phase.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceType, rawText]
+              properties:
+                sourceType: { type: string, enum: [PASTED_EMAIL, PASTED_PORTAL, PASTED_MESSAGE] }
+                rawText: { type: string, minLength: 1 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RequirementImportResult" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: Pool is not DRAFT }
+    get:
+      operationId: listRequirementSources
+      summary: Every import attempt for this pool (organizer-only), oldest first — an audit trail of what was pasted and when.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RequirementSource" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+
   /household/dashboard:
     get:
       operationId: getHouseholdDashboard
@@ -1722,3 +1776,23 @@ components:
         quantity: { type: integer }
         custodianLocation: { type: string, nullable: true }
         createdAt: { type: string, format: date-time }
+
+    RequirementSource:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        poolId: { type: string, format: uuid }
+        sourceType:
+          type: string
+          enum: [PDF, PHOTO, SCREENSHOT, WORD_DOC, PASTED_EMAIL, PASTED_PORTAL, PASTED_MESSAGE, MANUAL]
+        rawText: { type: string, nullable: true }
+        extractedRequirementCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+
+    RequirementImportResult:
+      type: object
+      properties:
+        source: { $ref: "#/components/schemas/RequirementSource" }
+        requirements:
+          type: array
+          items: { $ref: "#/components/schemas/Requirement" }

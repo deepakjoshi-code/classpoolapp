@@ -907,6 +907,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pools/{poolId}/requirement-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every import attempt for this pool (organizer-only), oldest first — an audit trail of what was pasted and when. */
+        get: operations["listRequirementSources"];
+        put?: never;
+        /** Organizer pastes a supply list (a forwarded email, school portal text, or message) and AI extracts candidate requirements from it (PRD §3.1/§3.2). Every extracted field keeps its source evidence and confidence score. An item at or above the confidence threshold (0.85) is created as `CONFIRMED`-eligible `EXTRACTED` (still requires organizer confirmation like every requirement, per §3.3 — "nothing is financially actionable until a human organizer verifies"); below it, `NEEDS_REVIEW` (the organizer must Correct/Edit before confirming — never a silent guess, per §3.2's PM update). Manual entry (`POST .../requirements`) remains available indefinitely alongside this, never replaced by it. Only while the pool is `DRAFT` — matches every other requirement-creating action. V1 only accepts pasted text — file upload (PDF/photo/screenshot/Word doc, needing object storage) is a documented gap, not built in this phase. */
+        post: operations["importRequirementsFromText"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/household/dashboard": {
         parameters: {
             query?: never;
@@ -1315,6 +1333,22 @@ export interface components {
             custodianLocation?: string | null;
             /** Format: date-time */
             createdAt?: string;
+        };
+        RequirementSource: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            poolId?: string;
+            /** @enum {string} */
+            sourceType?: "PDF" | "PHOTO" | "SCREENSHOT" | "WORD_DOC" | "PASTED_EMAIL" | "PASTED_PORTAL" | "PASTED_MESSAGE" | "MANUAL";
+            rawText?: string | null;
+            extractedRequirementCount?: number;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        RequirementImportResult: {
+            source?: components["schemas"]["RequirementSource"];
+            requirements?: components["schemas"]["Requirement"][];
         };
     };
     responses: never;
@@ -3237,6 +3271,79 @@ export interface operations {
                 content?: never;
             };
             /** @description Pool is not DISTRIBUTING */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listRequirementSources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequirementSource"][];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    importRequirementsFromText: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    sourceType: "PASTED_EMAIL" | "PASTED_PORTAL" | "PASTED_MESSAGE";
+                    rawText: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequirementImportResult"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool is not DRAFT */
             409: {
                 headers: {
                     [name: string]: unknown;
