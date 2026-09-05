@@ -266,6 +266,77 @@ public class PaymentService {
         return householdTotals;
     }
 
+    // ==================== Substitution top-up charges (Phase 10) ====================
+
+    /**
+     * Splits {@code amountCents} across households proportionally to their share of {@code
+     * purchaseRequiredQuantity} for exactly one requirement — the same need-based-proportional math
+     * {@link #computeHouseholdTotals} uses per requirement, generalized here to an arbitrary total
+     * rather than {@code unitCostCents * purchaseRequiredQuantity} derived from the full purchase
+     * plan. Reused by {@code OrderService.recordOrder} for a substitution top-up charge (PRD §9.1
+     * update, contract's {@code OrderLine.substitutionResolution} description) rather than
+     * duplicating this math a second time — see apps/api/README.md's Phase 10 notes for why this
+     * lives here instead of in {@code OrderService}.
+     *
+     * <p>Rounds each household's share half-up (same as {@link #computeHouseholdTotals}); a
+     * household whose rounded share is exactly 0 is omitted from the result entirely, per the
+     * contract's own wording ("skip creating a $0 top-up"). As with {@link #computeHouseholdTotals},
+     * the sum across households need not equal {@code amountCents} to the cent — accepted V1
+     * rounding drift, not a bug.
+     */
+    Map<UUID, Integer> splitAmountByPurchaseShare(UUID requirementId, int amountCents) {
+        List<AllocationLine> purchaseLines = allocationLineRepository
+                .findByRequirementIdInOrderByRequirementIdAscStudentIdAsc(List.of(requirementId)).stream()
+                .filter(l -> l.getPurchaseRequiredQuantity() > 0)
+                .toList();
+        if (purchaseLines.isEmpty()) {
+            return Map.of();
+        }
+        int totalQuantity = purchaseLines.stream().mapToInt(AllocationLine::getPurchaseRequiredQuantity).sum();
+        if (totalQuantity == 0) {
+            return Map.of();
+        }
+
+        List<UUID> studentIds = purchaseLines.stream().map(AllocationLine::getStudentId).distinct().toList();
+        Map<UUID, UUID> householdByStudent = studentRepository.findAllById(studentIds).stream()
+                .collect(Collectors.toMap(Student::getId, Student::getHouseholdId));
+
+        Map<UUID, Integer> quantityByHousehold = new LinkedHashMap<>();
+        for (AllocationLine line : purchaseLines) {
+            UUID householdId = householdByStudent.get(line.getStudentId());
+            if (householdId == null) {
+                continue;
+            }
+            quantityByHousehold.merge(householdId, line.getPurchaseRequiredQuantity(), Integer::sum);
+        }
+
+        Map<UUID, Integer> shareByHousehold = new LinkedHashMap<>();
+        for (Map.Entry<UUID, Integer> entry : quantityByHousehold.entrySet()) {
+            int share = (int) Math.round(amountCents * (double) entry.getValue() / totalQuantity);
+            if (share != 0) {
+                shareByHousehold.put(entry.getKey(), share);
+            }
+        }
+        return shareByHousehold;
+    }
+
+    /**
+     * Creates and persists one new {@code PENDING} {@link Payment} per household affected by a
+     * substitution top-up charge (PRD §9.1 update) — reuses {@link #splitAmountByPurchaseShare} for
+     * the proportional math and this class's existing {@link Payment} construction exactly as-is,
+     * so {@code OrderService.recordOrder} adds no new payment concept and needs no new frontend
+     * surface (rides the existing collection UI). Returns the empty list if every household's
+     * rounded share came out to $0.
+     */
+    @Transactional
+    List<Payment> createTopUpPayments(UUID poolId, UUID requirementId, int deltaCents) {
+        Map<UUID, Integer> shareByHousehold = splitAmountByPurchaseShare(requirementId, deltaCents);
+        List<Payment> payments = shareByHousehold.entrySet().stream()
+                .map(e -> new Payment(poolId, e.getKey(), e.getValue()))
+                .toList();
+        return paymentRepository.saveAll(payments);
+    }
+
     /** Organizer-only (contract) — includes household identity, same
      *  organizer-sees-identity-for-coordination precedent as {@code ContributionService
      *  .listForOrganizer}. */

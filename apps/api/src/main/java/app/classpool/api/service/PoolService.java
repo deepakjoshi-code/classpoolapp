@@ -159,6 +159,35 @@ public class PoolService {
         poolRepository.save(pool);
     }
 
+    /**
+     * Phase 10's {@code DistributionService.generateDistribution} moves the pool {@code ORDERED ->
+     * DISTRIBUTING} once the distribution batch has been generated — package-visible, mirroring
+     * {@link #transitionToOrdered} exactly.
+     */
+    @Transactional
+    void transitionToDistributing(Pool pool) {
+        pool.setState(PoolState.DISTRIBUTING);
+        poolRepository.save(pool);
+    }
+
+    /**
+     * Organizer-only (contract). Requires the pool to be {@code DISTRIBUTING} (409 otherwise). V1
+     * doesn't require every {@code DistributionItem} to already be marked delivered first — an
+     * accepted organizer-trust simplification per the contract's own summary, the same posture as
+     * self-reported inventory (Phase 4). One-way: {@code DISTRIBUTING -> COMPLETED}.
+     */
+    @Transactional
+    public PoolDetailResponse complete(UUID callerUserId, UUID poolId) {
+        Pool pool = getEntityOrThrow(poolId);
+        requireOrganizer(callerUserId, pool.getClassroomId());
+        if (pool.getState() != PoolState.DISTRIBUTING) {
+            throw new ConflictException("Pool is not DISTRIBUTING");
+        }
+        pool.setState(PoolState.COMPLETED);
+        poolRepository.save(pool);
+        return toDetail(pool);
+    }
+
     /** Package-visible so {@code PaymentService.finalizePayments} can build the {@code
      *  PoolDetail} response right after transitioning the pool, without a second membership
      *  check/query round trip — reuses the same assembly {@link #confirm} uses internally. */
