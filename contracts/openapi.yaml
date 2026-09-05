@@ -776,6 +776,276 @@ paths:
         "403": { description: Caller is not an organizer on this pool's classroom }
         "409": { description: "No plan exists yet, or it's already approved" }
 
+  /classrooms/{classroomId}/stripe-onboarding:
+    post:
+      operationId: startStripeOnboarding
+      summary: >
+        Organizer starts (or resumes) Stripe Express onboarding for this
+        classroom (PRD §8.4: "lightweight Stripe Express onboarding ...
+        the first time they open a pool for payment"). ClassPool never
+        holds a balance — every parent payment settles directly to this
+        account (destination charges). Returns a hosted onboarding URL to
+        redirect the organizer to. Idempotent — calling again while
+        `PENDING` returns the same account/URL rather than creating a
+        second one.
+      parameters:
+        - $ref: "#/components/parameters/ClassroomId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrganizerStripeAccount" }
+        "403": { description: Caller is not an organizer on this classroom }
+
+  /classrooms/{classroomId}/stripe-onboarding/complete:
+    post:
+      operationId: completeStripeOnboarding
+      summary: >
+        Marks onboarding `ACTIVE` once the organizer has returned from
+        Stripe's hosted flow. In production this transition is normally
+        driven by a Stripe webhook, not a client call — this endpoint
+        exists so the frontend's own return-URL landing page can settle
+        the status without waiting on a webhook round trip in the
+        meantime; a later phase may additionally reconcile via webhook.
+        409 if there's no `PENDING` onboarding in progress.
+      parameters:
+        - $ref: "#/components/parameters/ClassroomId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrganizerStripeAccount" }
+        "403": { description: Caller is not an organizer on this classroom }
+        "409": { description: No pending onboarding to complete }
+
+  /classrooms/{classroomId}/stripe-onboarding/status:
+    get:
+      operationId: getStripeOnboardingStatus
+      summary: Current onboarding status for this classroom, organizer-only. 404 if never started.
+      parameters:
+        - $ref: "#/components/parameters/ClassroomId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrganizerStripeAccount" }
+        "403": { description: Caller is not an organizer on this classroom }
+        "404": { description: Onboarding has not been started for this classroom }
+
+  /pools/{poolId}/payments/generate:
+    post:
+      operationId: generatePayments
+      summary: >
+        Organizer generates one Payment per household with residual
+        purchase demand (PRD §8.1-8.3's need-based fairness model — "each
+        family pays for its own residual items"). Per requirement, the
+        line's total cost is divided only across the units actually
+        needed (not units purchased — waste/leftover isn't billed to
+        anyone, PRD §7.2's worked example), then summed per household
+        across every requirement. Requires the approved `PurchasePlan`
+        and an `ACTIVE` `OrganizerStripeAccount` for this classroom —
+        409 naming whichever precondition is missing. One-way: moves the
+        pool `PURCHASE_PROPOSED → PAYMENT_OPEN`; 409 if payments already
+        exist for this pool.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Payment" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "No approved purchase plan, Stripe onboarding isn't ACTIVE, or payments already exist" }
+
+  /pools/{poolId}/payments:
+    get:
+      operationId: listPaymentsForOrganizer
+      summary: >
+        Every household's payment for this pool, organizer-only —
+        includes household identity, per the PM update's threshold-gate
+        risk banner needing to name an outstanding family (same
+        organizer-sees-identity-for-coordination precedent as Phase 5's
+        contributions listing).
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Payment" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+
+  /pools/{poolId}/payments/mine:
+    get:
+      operationId: getMyPayment
+      summary: >
+        The caller's own household's payment for this pool, or null if
+        payments haven't been generated yet or this household has no
+        residual demand (nothing to pay).
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment", nullable: true }
+        "403": { description: Caller has no Membership on this pool's classroom }
+
+  /pools/{poolId}/payments/{paymentId}/pay:
+    post:
+      operationId: payMyPayment
+      summary: >
+        The owing household pays via card/Apple Pay/Google Pay (PRD
+        §8.4: Stripe Connect destination charge straight to the
+        organizer's own account — the frontend must show the "you're
+        paying [organizer], not ClassPool" disclosure before calling
+        this). Only the household that owns this payment may call it.
+        409 if not currently `PENDING`.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - name: paymentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [method]
+              properties:
+                method: { type: string, enum: [CARD, APPLE_PAY, GOOGLE_PAY] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "403": { description: Caller's household does not own this payment }
+        "409": { description: Payment is not PENDING }
+
+  /pools/{poolId}/payments/{paymentId}/mark-cash-pending:
+    post:
+      operationId: markPaymentCashPending
+      summary: >
+        Organizer records that a household will pay by cash/check
+        instead of Stripe (PRD §8.4 update's fallback for a family
+        without a card) — `PENDING → PENDING_CASH`.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - name: paymentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: Payment is not PENDING }
+
+  /pools/{poolId}/payments/{paymentId}/mark-cash-received:
+    post:
+      operationId: markPaymentCashReceived
+      summary: Organizer confirms cash was physically collected — `PENDING_CASH → PAID_CASH_RECEIVED`.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - name: paymentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: Payment is not PENDING_CASH }
+
+  /pools/{poolId}/payments/{paymentId}/refund:
+    post:
+      operationId: refundPayment
+      summary: >
+        Full refund (PRD §8.4 update's minimum V1 rule: full refund
+        before the pool reaches `ORDERED`; no refund after — the
+        paid-for item is redirected to Class Reserve instead, a later
+        phase). 409 once the pool has reached `ORDERED`, or if the
+        payment isn't `PAID`/`PAID_CASH_RECEIVED`.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+        - name: paymentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "Pool has already reached ORDERED, or the payment isn't in a refundable state" }
+
+  /pools/{poolId}/payments/summary:
+    get:
+      operationId: getPaymentsSummary
+      summary: >
+        The organizer's payment-threshold view (PRD §8.4 update): total
+        owed vs. collected, percent collected against the platform-set
+        90% threshold, and the outstanding households (name + amount)
+        for the risk banner ahead of `finalize`.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentsSummary" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+
+  /pools/{poolId}/payments/finalize:
+    post:
+      operationId: finalizePayments
+      summary: >
+        Organizer proceeds past payment collection (PRD §8.4 update's
+        threshold gate). Requires ≥90% collected, unless
+        `acknowledgeBelowThreshold: true` is passed — an explicit
+        organizer override, never a lowered threshold. One-way: moves
+        the pool `PAYMENT_OPEN → ORDERED`, the hand-off point into
+        Phase 10's ordering/distribution work.
+      parameters:
+        - $ref: "#/components/parameters/PoolId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                acknowledgeBelowThreshold: { type: boolean, default: false }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PoolDetail" }
+        "403": { description: Caller is not an organizer on this pool's classroom }
+        "409": { description: "Below the 90% threshold and not acknowledged, or the pool isn't PAYMENT_OPEN" }
+
   /household/dashboard:
     get:
       operationId: getHouseholdDashboard
@@ -1119,3 +1389,49 @@ components:
           items: { $ref: "#/components/schemas/PurchasePlanLine" }
         proposedAt: { type: string, format: date-time }
         approvedAt: { type: string, format: date-time, nullable: true }
+
+    OrganizerStripeAccount:
+      type: object
+      properties:
+        classroomId: { type: string, format: uuid }
+        status: { type: string, enum: [PENDING, ACTIVE, RESTRICTED] }
+        onboardingUrl:
+          type: string
+          nullable: true
+          description: Hosted onboarding link — only meaningful while status is PENDING.
+
+    Payment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        poolId: { type: string, format: uuid }
+        householdId: { type: string, format: uuid }
+        householdDisplayName:
+          type: string
+          nullable: true
+          description: Organizer-only identity, same privacy posture as Contribution.offeringParentDisplayName — null on the household's own "mine" view, where it would be redundant.
+        amountCents: { type: integer }
+        method: { type: string, enum: [CARD, APPLE_PAY, GOOGLE_PAY, CASH], nullable: true }
+        state:
+          type: string
+          enum: [PENDING, PAID, FAILED, REFUNDED, PARTIALLY_REFUNDED, PENDING_CASH, PAID_CASH_RECEIVED]
+        createdAt: { type: string, format: date-time }
+
+    OutstandingHousehold:
+      type: object
+      properties:
+        householdId: { type: string, format: uuid }
+        householdDisplayName: { type: string, nullable: true }
+        amountCents: { type: integer }
+
+    PaymentsSummary:
+      type: object
+      properties:
+        totalOwedCents: { type: integer }
+        totalCollectedCents: { type: integer }
+        percentCollected: { type: number, description: "0-100." }
+        thresholdPercent: { type: number, description: "Platform-set, currently 90 — not organizer-editable." }
+        meetsThreshold: { type: boolean }
+        outstandingHouseholds:
+          type: array
+          items: { $ref: "#/components/schemas/OutstandingHousehold" }

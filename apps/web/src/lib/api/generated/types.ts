@@ -583,6 +583,210 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/classrooms/{classroomId}/stripe-onboarding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer starts (or resumes) Stripe Express onboarding for this classroom (PRD §8.4: "lightweight Stripe Express onboarding ... the first time they open a pool for payment"). ClassPool never holds a balance — every parent payment settles directly to this account (destination charges). Returns a hosted onboarding URL to redirect the organizer to. Idempotent — calling again while `PENDING` returns the same account/URL rather than creating a second one. */
+        post: operations["startStripeOnboarding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/classrooms/{classroomId}/stripe-onboarding/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Marks onboarding `ACTIVE` once the organizer has returned from Stripe's hosted flow. In production this transition is normally driven by a Stripe webhook, not a client call — this endpoint exists so the frontend's own return-URL landing page can settle the status without waiting on a webhook round trip in the meantime; a later phase may additionally reconcile via webhook. 409 if there's no `PENDING` onboarding in progress. */
+        post: operations["completeStripeOnboarding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/classrooms/{classroomId}/stripe-onboarding/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current onboarding status for this classroom, organizer-only. 404 if never started. */
+        get: operations["getStripeOnboardingStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/payments/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer generates one Payment per household with residual purchase demand (PRD §8.1-8.3's need-based fairness model — "each family pays for its own residual items"). Per requirement, the line's total cost is divided only across the units actually needed (not units purchased — waste/leftover isn't billed to anyone, PRD §7.2's worked example), then summed per household across every requirement. Requires the approved `PurchasePlan` and an `ACTIVE` `OrganizerStripeAccount` for this classroom — 409 naming whichever precondition is missing. One-way: moves the pool `PURCHASE_PROPOSED → PAYMENT_OPEN`; 409 if payments already exist for this pool. */
+        post: operations["generatePayments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every household's payment for this pool, organizer-only — includes household identity, per the PM update's threshold-gate risk banner needing to name an outstanding family (same organizer-sees-identity-for-coordination precedent as Phase 5's contributions listing). */
+        get: operations["listPaymentsForOrganizer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/payments/mine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's own household's payment for this pool, or null if payments haven't been generated yet or this household has no residual demand (nothing to pay). */
+        get: operations["getMyPayment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/payments/{paymentId}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The owing household pays via card/Apple Pay/Google Pay (PRD §8.4: Stripe Connect destination charge straight to the organizer's own account — the frontend must show the "you're paying [organizer], not ClassPool" disclosure before calling this). Only the household that owns this payment may call it. 409 if not currently `PENDING`. */
+        post: operations["payMyPayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/payments/{paymentId}/mark-cash-pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer records that a household will pay by cash/check instead of Stripe (PRD §8.4 update's fallback for a family without a card) — `PENDING → PENDING_CASH`. */
+        post: operations["markPaymentCashPending"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/payments/{paymentId}/mark-cash-received": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer confirms cash was physically collected — `PENDING_CASH → PAID_CASH_RECEIVED`. */
+        post: operations["markPaymentCashReceived"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/payments/{paymentId}/refund": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Full refund (PRD §8.4 update's minimum V1 rule: full refund before the pool reaches `ORDERED`; no refund after — the paid-for item is redirected to Class Reserve instead, a later phase). 409 once the pool has reached `ORDERED`, or if the payment isn't `PAID`/`PAID_CASH_RECEIVED`. */
+        post: operations["refundPayment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/payments/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The organizer's payment-threshold view (PRD §8.4 update): total owed vs. collected, percent collected against the platform-set 90% threshold, and the outstanding households (name + amount) for the risk banner ahead of `finalize`. */
+        get: operations["getPaymentsSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pools/{poolId}/payments/finalize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Organizer proceeds past payment collection (PRD §8.4 update's threshold gate). Requires ≥90% collected, unless `acknowledgeBelowThreshold: true` is passed — an explicit organizer override, never a lowered threshold. One-way: moves the pool `PAYMENT_OPEN → ORDERED`, the hand-off point into Phase 10's ordering/distribution work. */
+        post: operations["finalizePayments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/household/dashboard": {
         parameters: {
             query?: never;
@@ -867,6 +1071,47 @@ export interface components {
             proposedAt?: string;
             /** Format: date-time */
             approvedAt?: string | null;
+        };
+        OrganizerStripeAccount: {
+            /** Format: uuid */
+            classroomId?: string;
+            /** @enum {string} */
+            status?: "PENDING" | "ACTIVE" | "RESTRICTED";
+            /** @description Hosted onboarding link — only meaningful while status is PENDING. */
+            onboardingUrl?: string | null;
+        };
+        Payment: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            poolId?: string;
+            /** Format: uuid */
+            householdId?: string;
+            /** @description Organizer-only identity, same privacy posture as Contribution.offeringParentDisplayName — null on the household's own "mine" view, where it would be redundant. */
+            householdDisplayName?: string | null;
+            amountCents?: number;
+            /** @enum {string|null} */
+            method?: "CARD" | "APPLE_PAY" | "GOOGLE_PAY" | "CASH" | null;
+            /** @enum {string} */
+            state?: "PENDING" | "PAID" | "FAILED" | "REFUNDED" | "PARTIALLY_REFUNDED" | "PENDING_CASH" | "PAID_CASH_RECEIVED";
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        OutstandingHousehold: {
+            /** Format: uuid */
+            householdId?: string;
+            householdDisplayName?: string | null;
+            amountCents?: number;
+        };
+        PaymentsSummary: {
+            totalOwedCents?: number;
+            totalCollectedCents?: number;
+            /** @description 0-100. */
+            percentCollected?: number;
+            /** @description Platform-set, currently 90 — not organizer-editable. */
+            thresholdPercent?: number;
+            meetsThreshold?: boolean;
+            outstandingHouseholds?: components["schemas"]["OutstandingHousehold"][];
         };
     };
     responses: never;
@@ -2073,6 +2318,428 @@ export interface operations {
                 content?: never;
             };
             /** @description No plan exists yet, or it's already approved */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    startStripeOnboarding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                classroomId: components["parameters"]["ClassroomId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizerStripeAccount"];
+                };
+            };
+            /** @description Caller is not an organizer on this classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    completeStripeOnboarding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                classroomId: components["parameters"]["ClassroomId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizerStripeAccount"];
+                };
+            };
+            /** @description Caller is not an organizer on this classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No pending onboarding to complete */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getStripeOnboardingStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                classroomId: components["parameters"]["ClassroomId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizerStripeAccount"];
+                };
+            };
+            /** @description Caller is not an organizer on this classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Onboarding has not been started for this classroom */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    generatePayments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Payment"][];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No approved purchase plan, Stripe onboarding isn't ACTIVE, or payments already exist */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listPaymentsForOrganizer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Payment"][];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getMyPayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Payment"];
+                };
+            };
+            /** @description Caller has no Membership on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    payMyPayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                paymentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    method: "CARD" | "APPLE_PAY" | "GOOGLE_PAY";
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Payment"];
+                };
+            };
+            /** @description Caller's household does not own this payment */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Payment is not PENDING */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    markPaymentCashPending: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                paymentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Payment"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Payment is not PENDING */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    markPaymentCashReceived: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                paymentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Payment"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Payment is not PENDING_CASH */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    refundPayment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+                paymentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Payment"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pool has already reached ORDERED, or the payment isn't in a refundable state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getPaymentsSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentsSummary"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    finalizePayments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                poolId: components["parameters"]["PoolId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default false */
+                    acknowledgeBelowThreshold?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolDetail"];
+                };
+            };
+            /** @description Caller is not an organizer on this pool's classroom */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Below the 90% threshold and not acknowledged, or the pool isn't PAYMENT_OPEN */
             409: {
                 headers: {
                     [name: string]: unknown;
