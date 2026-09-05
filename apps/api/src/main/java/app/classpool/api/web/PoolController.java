@@ -1,5 +1,7 @@
 package app.classpool.api.web;
 
+import app.classpool.api.dto.AllocationLineResponse;
+import app.classpool.api.dto.AllocationSummaryResponse;
 import app.classpool.api.dto.ContributionResponse;
 import app.classpool.api.dto.CreateRequirementRequest;
 import app.classpool.api.dto.InventoryLineResponse;
@@ -8,6 +10,7 @@ import app.classpool.api.dto.OfferContributionRequest;
 import app.classpool.api.dto.PoolDetailResponse;
 import app.classpool.api.dto.RequirementResponse;
 import app.classpool.api.dto.SetInventoryRequest;
+import app.classpool.api.service.AllocationService;
 import app.classpool.api.service.ContributionService;
 import app.classpool.api.service.InventoryService;
 import app.classpool.api.service.PoolService;
@@ -28,13 +31,16 @@ public class PoolController {
     private final RequirementService requirementService;
     private final InventoryService inventoryService;
     private final ContributionService contributionService;
+    private final AllocationService allocationService;
 
     public PoolController(PoolService poolService, RequirementService requirementService,
-                           InventoryService inventoryService, ContributionService contributionService) {
+                           InventoryService inventoryService, ContributionService contributionService,
+                           AllocationService allocationService) {
         this.poolService = poolService;
         this.requirementService = requirementService;
         this.inventoryService = inventoryService;
         this.contributionService = contributionService;
+        this.allocationService = allocationService;
     }
 
     @GetMapping("/{poolId}")
@@ -119,5 +125,23 @@ public class PoolController {
                                                             @PathVariable UUID poolId,
                                                             @PathVariable UUID contributionId) {
         return contributionService.markReceived(callerUserId, poolId, contributionId);
+    }
+
+    @PostMapping("/{poolId}/reconcile")
+    public AllocationSummaryResponse reconcile(@AuthenticationPrincipal UUID callerUserId,
+                                                @PathVariable UUID poolId) {
+        return allocationService.reconcile(callerUserId, poolId);
+    }
+
+    @GetMapping("/{poolId}/allocation")
+    public AllocationSummaryResponse getAllocation(@AuthenticationPrincipal UUID callerUserId,
+                                                    @PathVariable UUID poolId) {
+        return allocationService.getAllocationForOrganizer(callerUserId, poolId);
+    }
+
+    @GetMapping("/{poolId}/allocation/mine")
+    public List<AllocationLineResponse> getMyAllocation(@AuthenticationPrincipal UUID callerUserId,
+                                                          @PathVariable UUID poolId) {
+        return allocationService.getMyAllocation(callerUserId, poolId);
     }
 }

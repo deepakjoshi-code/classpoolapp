@@ -110,6 +110,20 @@ public class PoolService {
                 .orElseThrow(() -> new NotFoundException("Pool not found: " + poolId));
     }
 
+    /**
+     * Phase 6/7's reconcile action ({@code AllocationService.reconcile}) moves the pool straight
+     * {@code OPEN_FOR_INVENTORY -> RECONCILING}, with no {@code OPEN_FOR_CONTRIBUTIONS} hop — see
+     * apps/api/README.md's "Allocation & residual-demand engine" notes for why that state is
+     * otherwise dead in this codebase. Package-visible, same instinct as
+     * {@link #requireOrganizer}/{@link #requireMembership}: the Pool state machine's transitions
+     * stay owned by this class even when another service's action drives them.
+     */
+    @Transactional
+    void transitionToReconciling(Pool pool) {
+        pool.setState(PoolState.RECONCILING);
+        poolRepository.save(pool);
+    }
+
     void requireOrganizer(UUID callerUserId, UUID classroomId) {
         if (!membershipRepository.hasOrganizerRole(classroomId, callerUserId)) {
             throw new ForbiddenException("Caller is not an organizer on this classroom");

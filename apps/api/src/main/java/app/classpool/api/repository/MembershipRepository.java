@@ -30,6 +30,15 @@ public interface MembershipRepository extends JpaRepository<Membership, UUID> {
     @EntityGraph(attributePaths = {"classroom", "student"})
     List<Membership> findByParentUserIdOrderByCreatedAtAsc(UUID parentUserId);
 
+    /**
+     * Every participating-student Membership on a classroom, in join order (PRD §6's
+     * "first-joined-first-served" tie-break for allocating scarce pool supply —
+     * {@code AllocationService.reconcile}). ORGANIZER-only rows (student null) are excluded by the
+     * query itself, same instinct as {@link #countDistinctStudentsByClassroom_Id}.
+     */
+    @EntityGraph(attributePaths = {"student"})
+    List<Membership> findByClassroom_IdAndStudentIsNotNullOrderByCreatedAtAsc(UUID classroomId);
+
     long countByClassroom_Id(UUID classroomId);
 
     boolean existsByClassroom_IdAndParentUserIdAndRoleIn(UUID classroomId, UUID parentUserId,
